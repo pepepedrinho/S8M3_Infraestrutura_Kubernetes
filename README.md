@@ -1,99 +1,109 @@
-# ZadInventory
+# ZAD Inventory
 
-Sistema de controle de estoque: **Angular** (frontend) + **Spring Boot** (backend) + **MySQL**.
+Sistema composto por **Frontend** e **Backend**, executados separadamente no Google Cloud Platform através do **Cloud Run**.
 
-O backend roda como **container único**: um jar executável com Tomcat embutido, pronto para
-deploy no **AWS Elastic Beanstalk** com o banco no **RDS**. Toda a configuração sensível vem
-de variáveis de ambiente — não há credencial no código.
+## Deploy manual
 
-## Arquitetura
+### 1. Autenticação no GCP
 
-| Componente | Tecnologia | Observação |
-|---|---|---|
-| Frontend | Angular + Nginx | build estático servido pelo Nginx |
-| Backend | Spring Boot 3.5 (Java 17), jar com Tomcat embutido | container único, porta 8080 |
-| Banco | MySQL 8.0 | RDS em produção, container no teste local |
-| Autenticação | JWT próprio (`JwtAuthenticationFilter` + `JwtService`) | login em `POST /api/auth/login` |
-
-## Variáveis de ambiente
-
-Obrigatórias para o backend subir — sem elas a aplicação falha no start:
-
-| Variável | Descrição | Exemplo |
-|---|---|---|
-| `DB_HOST` | Host do MySQL | `zadinventory.xxxx.us-east-1.rds.amazonaws.com` |
-| `DB_PORT` | Porta do MySQL | `3306` |
-| `DB_NAME` | Nome do database | `zadinventory` |
-| `DB_USER` | Usuário do banco | `admin` |
-| `DB_PASSWORD` | Senha do banco | *(defina no ambiente, nunca no código)* |
-| `JWT_SECRET` | Chave de assinatura do JWT, em **Base64**, com no mínimo 32 bytes | *(gere uma por ambiente)* |
-| `CORS_ORIGINS` | Origens liberadas no CORS, separadas por vírgula | `https://app.exemplo.com,http://localhost:4200` |
-
-Gerando um `JWT_SECRET` válido:
+Faça login:
 
 ```bash
-openssl rand -base64 32
+gcloud auth login
 ```
 
-## Teste local (Docker)
-
-Sobe MySQL 8.0 + backend na mesma rede:
+Defina o projeto:
 
 ```bash
-cd backend
-docker compose up --build
+gcloud config set project project-bb29153-91af-47dd-8df
 ```
 
-A API fica em `http://localhost:8080`. Os valores default do `docker-compose.yml` são
-**apenas para desenvolvimento local**; sobrescreva-os com um arquivo `.env` (já ignorado
-pelo Git) se quiser outros.
-
-## Build do backend
+Configure o Docker para utilizar o Artifact Registry:
 
 ```bash
-cd backend
-mvn clean package -DskipTests
-java -jar target/zadinventory-0.0.1-SNAPSHOT.jar
+gcloud auth configure-docker southamerica-east1-docker.pkg.dev
 ```
 
-O jar é autocontido (Tomcat embutido) — não precisa de Tomcat externo nem de deploy de `.war`.
+---
 
-## Deploy — Elastic Beanstalk + RDS
+## 2. Frontend
 
-1. **RDS**: crie uma instância MySQL 8.0 e anote endpoint, database, usuário e senha.
-2. **Source bundle**: gere um zip com o conteúdo da pasta `backend/` (o `Dockerfile` precisa
-   ficar na raiz do zip):
-   ```bash
-   cd backend
-   zip -r ../zadinventory-backend.zip . -x "target/*" ".git/*"
-   ```
-3. **Elastic Beanstalk**: crie um ambiente com a plataforma **Docker** e faça upload do zip.
-   O EB constrói a imagem pelo `Dockerfile` e publica o container na porta 8080.
-4. **Configuração → Updates, monitoring, and logging → Environment properties**: cadastre
-   todas as variáveis da tabela acima.
-5. **Security group**: libere a porta 3306 do RDS para o security group do ambiente EB.
-
-## Frontend
+Crie a imagem na pasta do frontend:
 
 ```bash
-cd frontend
-npm install
-npm run build
+docker build -t frontend:1.x .
 ```
 
-O build sai em `dist/zadinventory-frontend/browser/`. O `frontend/default.conf` é a config do
-Nginx e ainda aponta para os IPs do ambiente antigo — ajuste o `proxy_pass` de `/api/` para a
-URL do ambiente Elastic Beanstalk antes de publicar.
+Adicione a tag do Artifact Registry:
 
-## Usuários
+```bash
+docker tag frontend:1.x southamerica-east1-docker.pkg.dev/project-bb29153-91af-47dd-8df/frontend-zadinventory/frontend:1.x
+```
 
-| Tipo | Role |
-|---|---|
-| Administrador | `ROLE_GERENTE` |
-| Usuário limitado | `ROLE_FUNCIONARIO` |
+Envie a imagem:
 
-## Pasta `banco/`
+```bash
+docker push southamerica-east1-docker.pkg.dev/project-bb29153-91af-47dd-8df/frontend-zadinventory/frontend:1.x
+```
 
-Mantida como referência do ambiente antigo (MariaDB + Keycloak em VMs). **Não é usada** na
-arquitetura de container único — em produção o banco é o RDS, e no teste local é o serviço
-`mysql` do `backend/docker-compose.yml`.
+Após o `push`, o deploy pode ser realizado pela interface do **Cloud Run**, selecionando a imagem enviada ao Artifact Registry.
+
+Ou diretamente pelo `gcloud`:
+
+```bash
+gcloud run deploy frontend \
+  --image=southamerica-east1-docker.pkg.dev/project-bb29153-91af-47dd-8df/frontend-zadinventory/frontend:1.x \
+  --region=southamerica-east1 \
+  --platform=managed
+```
+
+---
+
+## 3. Backend
+
+Crie a imagem na pasta do backend:
+
+```bash
+docker build -t backend:1.x .
+```
+
+Adicione a tag do Artifact Registry:
+
+```bash
+docker tag backend:1.x southamerica-east1-docker.pkg.dev/project-bb29153-91af-47dd-8df/zadinventory/backend:1.x
+```
+
+Envie a imagem:
+
+```bash
+docker push southamerica-east1-docker.pkg.dev/project-bb29153-91af-47dd-8df/zadinventory/backend:1.x
+```
+
+Após o `push`, o deploy pode ser realizado pela interface do **Cloud Run**, configurando as variáveis de ambiente, VPC Connector e demais configurações necessárias.
+
+Ou diretamente pelo `gcloud`:
+
+```bash
+gcloud run deploy backend \
+  --image=southamerica-east1-docker.pkg.dev/project-bb29153-91af-47dd-8df/zadinventory/backend:1.0 \
+  --region=southamerica-east1 \
+  --platform=managed
+```
+
+---
+
+## 4. Novas versões
+
+Para publicar uma nova versão, altere a tag da imagem:
+
+```bash
+docker build -t backend:1.y .
+docker tag backend:1.y southamerica-east1-docker.pkg.dev/project-bb29153-91af-47dd-8df/zadinventory/backend:1.y
+docker push southamerica-east1-docker.pkg.dev/project-bb29153-91af-47dd-8df/zadinventory/backend:1.y
+```
+
+Depois, faça o deploy da nova imagem no Cloud Run.
+
+O mesmo processo se aplica ao frontend.
+
+> **Importante:** não versionar senhas, tokens ou outras credenciais no repositório.
