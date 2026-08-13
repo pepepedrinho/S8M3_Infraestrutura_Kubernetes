@@ -30,18 +30,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             @NonNull HttpServletResponse response,
             @NonNull FilterChain filterChain
     ) throws ServletException, IOException {
-        final String authHeader = request.getHeader("Authorization");
+        // IMPORTANTE: o JWT da aplicação (usuário) vem no header X-App-Authorization.
+        // O header "Authorization" é reservado exclusivamente para o Google ID Token
+        // usado pelo IAM do Cloud Run (frontend -> backend), e NÃO deve ser lido aqui.
+        final String authHeader = request.getHeader("X-App-Authorization");
         final String jwt;
         final String userEmail;
         final String path = request.getRequestURI();
-/*
-        System.out.println("URI: " + request.getRequestURI());
-        System.out.println("Context Path: " + request.getContextPath());
-        System.out.println("Servlet Path: " + request.getServletPath());
-        System.out.println("Path Info: " + request.getPathInfo());
-        System.out.println("Full URL: " + request.getRequestURL().toString());
-        System.out.println("Query: " + request.getQueryString());
-*/
 
         System.out.println("URI: " + request.getRequestURI());
 
@@ -49,11 +44,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             return;
         }
-        System.out.println("📍 Entrou no método JwtAuthenticationFilter "+authHeader);
+        System.out.println("📍 Entrou no método JwtAuthenticationFilter " + authHeader);
 
         jwt = authHeader.substring(7);
         userEmail = jwtService.extractUsername(jwt);
-
 
         if (userEmail != null && SecurityContextHolder.getContext().getAuthentication() == null) {
             UserDetails userDetails = this.userDetailsService.loadUserByUsername(userEmail);

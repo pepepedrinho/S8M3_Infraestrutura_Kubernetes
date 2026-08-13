@@ -17,6 +17,7 @@ public class UsuarioService {
 
     private final UsuarioRepository repository;
     private final PasswordEncoder passwordEncoder;
+
     @Transactional
     public UsuarioEntity salvar(UsuarioEntity usuario) {
         validarUsuario(usuario);
@@ -50,6 +51,13 @@ public class UsuarioService {
         return repository.buscarPorTipoOrdenado(tipo);
     }
 
+    /**
+     * @deprecated Compara senha em texto puro contra a coluna do banco, o que não
+     * funciona corretamente com senhas armazenadas em hash BCrypt e não deve ser
+     * usado para autenticação. O login oficial é feito via AuthenticationManager
+     * no AuthController. Remover se não houver mais nenhuma referência a este método.
+     */
+    @Deprecated
     public UsuarioEntity buscarPorEmailESenha(String email, String senha) {
         return repository.findByEmailAndSenha(email, senha)
                 .orElseThrow(() -> new RuntimeException("Usuário não encontrado"));
@@ -62,8 +70,8 @@ public class UsuarioService {
         usuarioExistente.setTipoUsuario(usuarioAtualizado.getTipoUsuario());
 
         if (usuarioAtualizado.getSenha() != null && !usuarioAtualizado.getSenha().isBlank()) {
-            // Por enquanto, não criptografa
-            usuarioExistente.setSenha(usuarioAtualizado.getSenha());
+            String senhaCriptografada = passwordEncoder.encode(usuarioAtualizado.getSenha());
+            usuarioExistente.setSenha(senhaCriptografada);
         }
 
         return repository.save(usuarioExistente);

@@ -24,7 +24,6 @@ public class JwtService {
     @Value("${jwt.expiration}")
     private long jwtExpiration;
 
-
     public String extractUsername(String token) {
         return extractClaim(token, Claims::getSubject);
     }
@@ -35,8 +34,7 @@ public class JwtService {
     }
 
     public String generateToken(UserDetails userDetails) {
-        System.out.println("Secretkey: "+secretKey);
-
+        System.out.println("Secretkey: " + secretKey);
         return generateToken(new HashMap<>(), userDetails);
     }
 

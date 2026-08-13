@@ -2,6 +2,7 @@ package app.zad.zadinventory.model.entity;
 
 import app.zad.zadinventory.model.enums.TipoUsuario;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -16,7 +17,6 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class UsuarioEntity {
 
     @Id
@@ -29,6 +29,7 @@ public class UsuarioEntity {
 
     @Column(nullable = false)
     @NotBlank(message = "Senha é obrigatória")
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String senha;
 
     @Enumerated(EnumType.STRING)
