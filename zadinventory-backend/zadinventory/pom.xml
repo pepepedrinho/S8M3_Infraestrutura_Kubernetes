@@ -189,7 +189,10 @@
 						<include>**/unit/**/*.java</include>
 					</includes>
 					<excludes>
-						<exclude>**/integration/**/*.java</exclude>
+						<!-- O diretorio e Integration/ com I maiusculo; o padrao em
+						     minusculo nao casava e o surefire acabava rodando os
+						     testes de integracao junto com os unitarios. -->
+						<exclude>**/Integration/**/*.java</exclude>
 					</excludes>
 				</configuration>
 			</plugin>
@@ -209,7 +212,7 @@
 				</executions>
 				<configuration>
 					<includes>
-						<include>**/integration/**/*.java</include>
+						<include>**/Integration/**/*.java</include>
 						<include>**/*IT.java</include>
 					</includes>
 				</configuration>

@@ -43,11 +43,11 @@ jobs:
           java-version: "17"
           cache: maven
 
-      - name: Make Maven Wrapper executable
-        run: chmod +x mvnw
-
+      # Usa o Maven do runner: o wrapper esta incompleto no repo (falta
+      # .mvn/wrapper), entao ./mvnw nao consegue nem gravar o jar que baixa.
+      # verify roda surefire (unitarios) e failsafe (integracao).
       - name: Run tests
-        run: ./mvnw test
+        run: mvn -B verify
 
   build-and-deploy:
     name: Build and Deploy Backend
