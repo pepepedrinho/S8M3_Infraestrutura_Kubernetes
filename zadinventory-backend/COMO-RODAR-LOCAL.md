@@ -67,9 +67,12 @@ X-App-Authorization: Bearer <token>
 ## 4. Testes
 
 ```powershell
-mvn test              # 129 testes unitários + de controller
-mvn verify            # inclui o relatório JaCoCo em target/jacoco-report
+mvn test              # 93 testes unitários (Surefire)
+mvn verify            # + 50 de integração (Failsafe) e o relatório JaCoCo em target/jacoco-report
 ```
+
+Os testes de `src/test/java/**/Integration/` rodam só no `verify`. É por isso que o
+CI usa `mvn verify`: com `mvn test` essas 50 verificações ficariam de fora.
 
 ## Perfis
 
