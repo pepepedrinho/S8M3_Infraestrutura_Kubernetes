@@ -1,0 +1,100 @@
+name: Backend CI/CD
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend.yml"
+
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend.yml"
+
+env:
+  PROJECT_ID: project-bb29153a-91af-47dd-8df
+  REGION: southamerica-east1
+  SERVICE: backend
+  IMAGE: southamerica-east1-docker.pkg.dev/project-bb29153a-91af-47dd-8df/zadinventory/backend
+  SERVICE_ACCOUNT: backend-cloud-run@project-bb29153a-91af-47dd-8df.iam.gserviceaccount.com
+
+jobs:
+  test:
+    name: Test Backend
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Make Maven Wrapper executable
+        run: chmod +x mvnw
+
+      - name: Run tests
+        run: ./mvnw test
+
+  build-and-deploy:
+    name: Build and Deploy Backend
+    runs-on: ubuntu-latest
+
+    needs: test
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate with Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker authentication
+        run: |
+          gcloud auth configure-docker \
+            southamerica-east1-docker.pkg.dev \
+            --quiet
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ env.IMAGE }}:${{ github.sha }} \
+            ./backend
+
+      - name: Push Docker image
+        run: |
+          docker push \
+            ${{ env.IMAGE }}:${{ github.sha }}
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE }} \
+            --image ${{ env.IMAGE }}:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --service-account ${{ env.SERVICE_ACCOUNT }} \
+            --platform managed \
+            --quiet

@@ -1,0 +1,11 @@
+{
+  "java.configuration.updateBuildConfiguration": "automatic",
+  "java.compile.nullAnalysis.mode": "automatic",
+  "java.jdt.ls.vmargs": "-Djavax.net.ssl.trustStoreType=Windows-ROOT",
+  "maven.executable.options": "-Djavax.net.ssl.trustStoreType=Windows-ROOT",
+  "files.encoding": "utf8",
+  "files.exclude": {
+    "**/target": true,
+    "**/.idea": true
+  }
+}
