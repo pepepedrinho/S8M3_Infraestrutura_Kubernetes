@@ -5,14 +5,14 @@ on:
     branches:
       - main
     paths:
-      - "backend/**"
+      - "zadinventory-backend/**"
       - ".github/workflows/backend.yml"
 
   pull_request:
     branches:
       - main
     paths:
-      - "backend/**"
+      - "zadinventory-backend/**"
       - ".github/workflows/backend.yml"
 
 env:
@@ -29,7 +29,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: backend
+        working-directory: zadinventory-backend/zadinventory
 
     steps:
       - name: Checkout repository
@@ -83,7 +83,7 @@ jobs:
         run: |
           docker build \
             -t ${{ env.IMAGE }}:${{ github.sha }} \
-            ./backend
+            ./zadinventory-backend
 
       - name: Push Docker image
         run: |
