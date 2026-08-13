@@ -1,0 +1,227 @@
+<!-- src/app/features/operacoes/operacao-list/operacao-list.component.html -->
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Operações</h2>
+  <button class="btn btn-primary" (click)="novaOperacao()" [disabled]="carregando">
+    <span *ngIf="carregando" class="spinner-border spinner-border-sm me-2"></span>
+    Nova Operação
+  </button>
+</div>
+
+<!-- Filtros e Estatísticas -->
+<div class="row mb-3">
+  <div class="col-md-4">
+    <label class="form-label">Filtrar por Situação</label>
+    <select class="form-select" (change)="filtrarPorSituacao($event)" [disabled]="carregando">
+      <option value="">Todas as situações</option>
+      <option value="REALIZADA">Realizada</option>
+      <option value="CANCELADA">Cancelada</option>
+      <option value="SEPARADA">Separada</option>
+    </select>
+  </div>
+  
+</div>
+
+<!-- Loading State -->
+<div *ngIf="carregando" class="text-center py-4">
+  <div class="spinner-border text-primary" role="status">
+    <span class="visually-hidden">Carregando...</span>
+  </div>
+  <p class="mt-2">Carregando operações...</p>
+</div>
+
+<!-- Tabela de Operações -->
+<table *ngIf="!carregando" class="table table-striped table-bordered table-hover">
+  <thead class="table-dark">
+    <tr>
+      <th>ID</th>
+      <th>Situação</th>
+      <th>Quantidade</th>
+      <th>Valor Total</th>
+      <th>Data</th>
+      <th>Produto</th>
+      <th>Usuário</th>
+      <th width="200">Ações</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr *ngFor="let operacao of operacoesFiltradas">
+      <td>{{ operacao.id }}</td>
+      <td>
+        <span [class]="getBadgeClass(operacao.situacao)">
+          {{ operacao.situacao }}
+        </span>
+      </td>
+      <td>{{ operacao.quantidade }}</td>
+      <td>{{ operacao.valorTotal | currency:'BRL' }}</td>
+      <td>{{ operacao.diaOperacao | date:'dd/MM/yyyy' }}</td>
+      <td>
+        <span *ngIf="operacao.produto" class="badge bg-secondary">
+          {{ operacao.produto.nome }}
+        </span>
+        <span *ngIf="!operacao.produto" class="text-muted">-</span>
+      </td>
+      <td>
+        <span *ngIf="operacao.usuario" class="badge bg-light text-dark">
+          {{ operacao.usuario.nome }}
+        </span>
+        <span *ngIf="!operacao.usuario" class="text-muted">-</span>
+      </td>
+      <td>
+        <div class="btn-group btn-group-sm">
+          <button class="btn btn-outline-warning" (click)="editar(operacao)" title="Editar">
+            <i class="bi bi-pencil"></i>
+          </button>
+          <button class="btn btn-outline-info" (click)="alterarSituacao(operacao)" title="Alterar Situação">
+            <i class="bi bi-arrow-repeat"></i>
+          </button>
+          <button class="btn btn-outline-danger" (click)="excluir(operacao)" title="Excluir">
+            <i class="bi bi-trash"></i>
+          </button>
+        </div>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- Mensagem de lista vazia -->
+<div *ngIf="!carregando && operacoesFiltradas.length === 0" class="text-center py-5">
+  <i class="bi bi-inbox display-1 text-muted"></i>
+  <h4 class="text-muted mt-3">Nenhuma operação encontrada</h4>
+  <p class="text-muted">Clique em "Nova Operação" para criar a primeira.</p>
+</div>
+
+<!-- Modal para Nova/Edição Operação -->
+<div class="modal fade" [class.show]="showModal" [style.display]="showModal ? 'block' : 'none'">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">
+          {{ operacaoEdit?.id ? 'Editar Operação' : 'Nova Operação' }}
+        </h5>
+        <button type="button" class="btn-close" (click)="fecharModal()"></button>
+      </div>
+      <div class="modal-body">
+        <form *ngIf="operacaoEdit">
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Produto</label>
+              <select 
+                class="form-select" 
+                [(ngModel)]="operacaoEdit.produtoId" 
+                name="produtoId"
+                required
+                [disabled]="carregandoProdutos"
+              >
+                
+                <option *ngFor="let produto of produtos" [value]="produto.id">
+                  {{ produto.nome }} - {{ produto.preco | currency:'BRL' }} (Estoque: {{ produto.quantidade }})
+                </option>
+              </select>
+              <div *ngIf="carregandoProdutos" class="form-text">
+                <small>Carregando produtos...</small>
+              </div>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Usuário</label>
+              <select 
+                class="form-select" 
+                [(ngModel)]="operacaoEdit.usuarioId" 
+                name="usuarioId"
+                required
+                [disabled]="carregandoUsuarios"
+              >
+                <option *ngFor="let usuario of usuarios" [value]="usuario.id">
+                  {{ usuario.nome }}
+                </option>
+              </select>
+              <div *ngIf="carregandoUsuarios" class="form-text">
+                <small>Carregando usuários...</small>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Situação</label>
+              <select class="form-select" [(ngModel)]="operacaoEdit.situacao" name="situacao">
+                <option value="REALIZADA">Realizada</option>
+                <option value="CANCELADA">Cancelada</option>
+                <option value="SEPARADA">Separada</option>
+              </select>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Data da Operação</label>
+              <input
+                type="date"
+                class="form-control"
+                [(ngModel)]="operacaoEdit.diaOperacao"
+                name="diaOperacao"
+              />
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Quantidade</label>
+            <input
+              type="number"
+              class="form-control"
+              [(ngModel)]="operacaoEdit.quantidade"
+              name="quantidade"
+              min="1"
+              required
+            />
+            <div class="form-text">
+              Informe a quantidade desejada para esta operação
+            </div>
+          </div>
+
+          <!-- Preview do Valor Total -->
+          <div *ngIf="calcularValorTotal() > 0" class="alert alert-info">
+            <strong>Valor Total Estimado:</strong> {{ calcularValorTotal() | currency:'BRL' }}
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" (click)="fecharModal()" [disabled]="salvando">
+          Cancelar
+        </button>
+        <button class="btn btn-success" (click)="salvar()" [disabled]="salvando || !operacaoEdit?.produtoId || !operacaoEdit?.usuarioId">
+          <span *ngIf="salvando" class="spinner-border spinner-border-sm me-2"></span>
+          {{ salvando ? 'Salvando...' : 'Salvar' }}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal para Alterar Situação -->
+<div class="modal fade" [class.show]="showSituacaoModal" [style.display]="showSituacaoModal ? 'block' : 'none'">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Alterar Situação</h5>
+        <button type="button" class="btn-close" (click)="fecharSituacaoModal()"></button>
+      </div>
+      <div class="modal-body">
+        <p><strong>Operação #{{ operacaoSituacao?.id }}</strong></p>
+        <div class="mb-3">
+          <label class="form-label">Nova Situação</label>
+          <select class="form-select" [(ngModel)]="novaSituacao">
+            <option value="REALIZADA">Realizada</option>
+            <option value="CANCELADA">Cancelada</option>
+            <option value="SEPARADA">Separada</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" (click)="fecharSituacaoModal()" [disabled]="salvando">
+          Cancelar
+        </button>
+        <button class="btn btn-success" (click)="confirmarSituacao()" [disabled]="salvando">
+          <span *ngIf="salvando" class="spinner-border spinner-border-sm me-2"></span>
+          Confirmar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,160 @@
+<!-- src/app/features/categorias/categoria-list/categoria-list.component.html -->
+<div class="container-fluid mt-4">
+  <!-- Card de Filtros - SIMPLIFICADO para Categorias -->
+  <div class="card mb-4" *ngIf="categorias.length > 0">
+    <div class="card-body">
+      <div class="row g-3">
+        <!-- Busca por Nome -->
+        <div class="col-md-6">
+          <label class="form-label">Buscar por nome</label>
+          <input
+            type="text"
+            class="form-control"
+            [(ngModel)]="filtro.nome"
+            (input)="aplicarFiltros()"
+            placeholder="Digite o nome da categoria..."
+          />
+        </div>
+
+        <!-- Busca por Descrição -->
+        <div class="col-md-4">
+          <label class="form-label">Buscar na descrição</label>
+          <input
+            type="text"
+            class="form-control"
+            [(ngModel)]="filtro.descricao"
+            (input)="aplicarFiltros()"
+            placeholder="Palavras na descrição..."
+          />
+        </div>
+
+        <!-- Botão Limpar Filtros -->
+        <div class="col-md-2 d-flex align-items-end">
+          <button
+            class="btn btn-outline-secondary w-100"
+            (click)="limparFiltros()"
+            [disabled]="!temFiltrosAtivos()"
+          >
+            Limpar Filtros
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cabeçalho com Contador -->
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>Categorias</h2>
+    <div>
+      <span class="badge bg-info me-2" *ngIf="temFiltrosAtivos()">
+        Filtros ativos
+      </span>
+      <span class="text-muted">
+        {{ categoriasFiltradas.length }} de {{ categorias.length }} categorias
+      </span>
+      <button class="btn btn-primary ms-3" (click)="novaCategoria()">
+        Nova Categoria
+      </button>
+    </div>
+  </div>
+
+  <!-- Tabela de Categorias -->
+  <table class="table table-striped table-bordered">
+    <thead class="table-dark">
+      <tr>
+        <th>ID</th>
+        <th>Nome</th>
+        <th>Descrição</th>
+        <th>Ações</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr *ngFor="let c of categoriasFiltradas">
+        <td>{{ c.id }}</td>
+        <td>{{ c.nome }}</td>
+        <td>{{ c.descricao }}</td>
+        <td>
+          <button class="btn btn-sm btn-warning me-2" (click)="editar(c)">
+            Editar
+          </button>
+          <button class="btn btn-sm btn-danger" (click)="excluir(c)">
+            Excluir
+          </button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- Mensagem quando não há resultados -->
+  <div *ngIf="categoriasFiltradas.length === 0" class="text-center py-5">
+    <div *ngIf="categorias.length === 0" class="text-muted">
+      <i class="fas fa-folder-open fa-3x mb-3"></i>
+      <h4>Nenhuma categoria cadastrada</h4>
+      <p>Clique em "Nova Categoria" para começar</p>
+    </div>
+    <div
+      *ngIf="categorias.length > 0 && categoriasFiltradas.length === 0"
+      class="text-warning"
+    >
+      <i class="fas fa-search fa-3x mb-3"></i>
+      <h4>Nenhuma categoria encontrada</h4>
+      <p>Tente ajustar os filtros de busca</p>
+      <button class="btn btn-outline-primary mt-2" (click)="limparFiltros()">
+        Limpar todos os filtros
+      </button>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div
+    class="modal"
+    tabindex="-1"
+    [ngStyle]="{ display: categoriaSelecionada ? 'block' : 'none' }"
+  >
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">
+            {{ categoriaSelecionada?.id ? "Editar Categoria" : "Nova Categoria" }}
+          </h5>
+          <button
+            type="button"
+            class="btn-close"
+            (click)="fecharModal()"
+          ></button>
+        </div>
+        <div class="modal-body">
+          <form *ngIf="categoriaSelecionada">
+            <div class="mb-3">
+              <label class="form-label">Nome</label>
+              <input
+                type="text"
+                class="form-control"
+                [(ngModel)]="categoriaSelecionada.nome"
+                name="nome"
+              />
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Descrição</label>
+              <input
+                type="text"
+                class="form-control"
+                [(ngModel)]="categoriaSelecionada.descricao"
+                name="descricao"
+              />
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" (click)="fecharModal()" [disabled]="isLoading">
+            Cancelar
+          </button>
+          <button class="btn btn-success" (click)="salvar()" [disabled]="isLoading">
+            <span *ngIf="isLoading" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+            {{ isLoading ? 'Salvando...' : 'Salvar' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

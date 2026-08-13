@@ -1,0 +1,317 @@
+<!-- src/app/features/produtos/produto-list/produto-list.component.html -->
+<div class="container-fluid mt-4">
+  <!-- Card de Filtros -->
+  <div class="card mb-4">
+    <div class="card-body">
+      <div class="row g-3">
+        <!-- Busca por Nome -->
+        <div class="col-md-4">
+          <label class="form-label">Buscar por nome</label>
+          <input
+            type="text"
+            class="form-control"
+            [(ngModel)]="filtro.nome"
+            (input)="aplicarFiltros()"
+            placeholder="Digite o nome..."
+          />
+        </div>
+
+        <!-- Filtro por Categoria -->
+        <div class="col-md-3">
+          <label class="form-label">Categoria</label>
+          <select
+            class="form-select"
+            [(ngModel)]="filtro.categoriaId"
+            (change)="aplicarFiltros()"
+          >
+            <option [ngValue]="null">Todas as categorias</option>
+            <option *ngFor="let c of categorias" [value]="c.id">
+              {{ c.nome || "#" + c.id }}
+            </option>
+          </select>
+        </div>
+
+        <!-- Filtro por Preço -->
+        <div class="col-md-3">
+          <label class="form-label">Preço máximo</label>
+          <input
+            type="number"
+            class="form-control"
+            [(ngModel)]="filtro.precoMaximo"
+            (input)="aplicarFiltros()"
+            placeholder="Ex: 100.00"
+            min="0"
+            step="0.01"
+          />
+        </div>
+
+        <!-- Botão Limpar Filtros -->
+        <div class="col-md-2 d-flex align-items-end">
+          <button
+            class="btn btn-outline-secondary w-100"
+            (click)="limparFiltros()"
+            [disabled]="!temFiltrosAtivos()"
+          >
+            Limpar Filtros
+          </button>
+        </div>
+      </div>
+
+      <!-- Filtro por Tags -->
+      <div class="row mt-3">
+        <div class="col-12">
+          <label class="form-label">Tags</label>
+          <div>
+            <div
+              class="form-check form-check-inline"
+              *ngFor="let t of tagsDisponiveis"
+            >
+              <input
+                class="form-check-input"
+                type="checkbox"
+                [id]="'filtro-tag-' + t.id"
+                [checked]="filtro.tagsIds.includes(t.id!)"
+                (change)="toggleTagFiltro(t)"
+              />
+              <label class="form-check-label" [for]="'filtro-tag-' + t.id">
+                {{ t.nome || "#" + t.id }}
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cabeçalho com Contador -->
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>Produtos</h2>
+    <div>
+      <span class="badge bg-info me-2" *ngIf="temFiltrosAtivos()">
+        Filtros ativos
+      </span>
+      <span class="text-muted">
+        {{ produtosFiltrados.length }} de {{ produtos.length }} produtos
+      </span>
+      <button class="btn btn-primary ms-3" (click)="novoProduto()">
+        Novo Produto
+      </button>
+    </div>
+  </div>
+
+  <!-- Tabela de Produtos -->
+  <table class="table table-striped table-bordered">
+    <thead class="table-dark">
+      <tr>
+        <th>ID</th>
+        <th>Nome</th>
+        <th>Descrição</th>
+        <th>Preço</th>
+        <th>Quantidade</th>
+        <th>Categoria</th>
+        <th>Usuário</th>
+        <th>Tags</th>
+        <th>Ações</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr *ngFor="let p of produtosFiltrados">
+        <td>{{ p.id ?? "—" }}</td>
+        <td>{{ p.nome }}</td>
+        <td>{{ p.descricao }}</td>
+        <td>{{ p.preco | currency : "BRL" }}</td>
+        <td>{{ p.quantidade ?? 0 }}</td>
+        <td>{{ p.categoria?.nome || "#" + (p.categoria?.id ?? "—") }}</td>
+        <td>{{ p.usuario?.nome || "#" + (p.usuario?.id ?? "—") }}</td>
+        <td>
+          <ng-container *ngIf="p.tags?.length; else semTags">
+            <span class="badge bg-secondary me-1" *ngFor="let t of p.tags">{{
+              t.nome || "#" + (t.id ?? "—")
+            }}</span>
+          </ng-container>
+          <ng-template #semTags
+            ><small class="text-muted">—</small></ng-template
+          >
+        </td>
+        <td>
+          <button class="btn btn-sm btn-warning me-2" (click)="editar(p)">
+            Editar
+          </button>
+          <button class="btn btn-sm btn-danger" (click)="excluir(p)">
+            Excluir
+          </button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- Mensagem quando não há resultados -->
+  <div *ngIf="produtosFiltrados.length === 0" class="text-center py-5">
+    <div *ngIf="produtos.length === 0" class="text-muted">
+      <i class="fas fa-box-open fa-3x mb-3"></i>
+      <h4>Nenhum produto cadastrado</h4>
+      <p>Clique em "Novo Produto" para começar</p>
+    </div>
+    <div
+      *ngIf="produtos.length > 0 && produtosFiltrados.length === 0"
+      class="text-warning"
+    >
+      <i class="fas fa-search fa-3x mb-3"></i>
+      <h4>Nenhum produto encontrado</h4>
+      <p>Tente ajustar os filtros de busca</p>
+      <button class="btn btn-outline-primary mt-2" (click)="limparFiltros()">
+        Limpar todos os filtros
+      </button>
+    </div>
+  </div>
+
+  <!-- Modal Backdrop -->
+  <div
+    class="modal-backdrop fade show"
+    *ngIf="produtoSelecionado"
+    (click)="fecharModal()"
+  ></div>
+
+  <!-- Modal -->
+  <div
+    class="modal fade"
+    tabindex="-1"
+    [class.show]="produtoSelecionado"
+    [style.display]="produtoSelecionado ? 'block' : 'none'"
+  >
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">
+            {{ produtoSelecionado?.id ? "Editar Produto" : "Novo Produto" }}
+          </h5>
+          <button
+            type="button"
+            class="btn-close"
+            (click)="fecharModal()"
+          ></button>
+        </div>
+
+        <div class="modal-body">
+          <form
+            *ngIf="produtoSelecionado"
+            (ngSubmit)="salvar()"
+            #produtoForm="ngForm"
+          >
+            <div class="row">
+              <div class="col-md-8 mb-3">
+                <label class="form-label">Nome</label>
+                <input
+                  type="text"
+                  class="form-control"
+                  [(ngModel)]="produtoSelecionado.nome"
+                  name="nome"
+                  required
+                />
+              </div>
+              <div class="col-md-4 mb-3">
+                <label class="form-label">Quantidade</label>
+                <input
+                  type="number"
+                  class="form-control"
+                  [(ngModel)]="produtoSelecionado.quantidade"
+                  name="quantidade"
+                  min="0"
+                  required
+                />
+              </div>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">Descrição</label>
+              <textarea
+                class="form-control"
+                [(ngModel)]="produtoSelecionado.descricao"
+                name="descricao"
+                rows="2"
+              ></textarea>
+            </div>
+
+            <div class="row">
+              <div class="col-md-4 mb-3">
+                <label class="form-label">Preço</label>
+                <input
+                  type="number"
+                  class="form-control"
+                  [(ngModel)]="produtoSelecionado.preco"
+                  name="preco"
+                  min="0"
+                  step="0.01"
+                  required
+                />
+              </div>
+
+              <div class="col-md-4 mb-3">
+                <label class="form-label">Categoria</label>
+                <select
+                  class="form-select"
+                  [(ngModel)]="produtoSelecionado.categoria"
+                  name="categoria"
+                  required
+                >
+                  <option [ngValue]="null">-- selecione --</option>
+                  <option *ngFor="let c of categorias" [ngValue]="c">
+                    {{ c.nome || "#" + (c.id ?? "—") }}
+                  </option>
+                </select>
+              </div>
+
+              <div class="col-md-4 mb-3">
+                <label class="form-label">Usuário</label>
+                <select
+                  class="form-select"
+                  [(ngModel)]="produtoSelecionado.usuario"
+                  name="usuario"
+                  required
+                >
+                  <option [ngValue]="null">-- selecione --</option>
+                  <option *ngFor="let u of usuarios" [ngValue]="u">
+                    {{ u.nome || "#" + u.id }}
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label d-block">Tags</label>
+              <div
+                class="form-check form-check-inline"
+                *ngFor="let t of tagsDisponiveis"
+              >
+                <input
+                  class="form-check-input"
+                  type="checkbox"
+                  [value]="t.id"
+                  (change)="toggleTag(t, $event)"
+                  [checked]="isTagSelected(t)"
+                  id="tag-{{ t.id ?? '' }}"
+                />
+                <label class="form-check-label" [for]="'tag-' + (t.id ?? '')">{{
+                  t.nome || "#" + (t.id ?? "—")
+                }}</label>
+              </div>
+            </div>
+          </form>
+        </div>
+
+        <div class="modal-footer">
+          <button
+            type="button"
+            class="btn btn-secondary"
+            (click)="fecharModal()"
+          >
+            Cancelar
+          </button>
+          <button type="button" class="btn btn-success" (click)="salvar()">
+            Salvar
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,201 @@
+<!-- src/app/features/usuarios/usuario-list/usuario-list.component.html -->
+<div class="container-fluid mt-4">
+  <!-- Card de Filtros - PERSONALIZADO para Usuários -->
+  <div class="card mb-4" *ngIf="usuarios.length > 0">
+    <div class="card-body">
+      <div class="row g-3">
+        <!-- Busca por Nome -->
+        <div class="col-md-4">
+          <label class="form-label">Buscar por nome</label>
+          <input
+            type="text"
+            class="form-control"
+            [(ngModel)]="filtro.nome"
+            (input)="aplicarFiltros()"
+            placeholder="Digite o nome..."
+          />
+        </div>
+
+        <!-- Busca por Email -->
+        <div class="col-md-3">
+          <label class="form-label">Buscar por email</label>
+          <input
+            type="text"
+            class="form-control"
+            [(ngModel)]="filtro.email"
+            (input)="aplicarFiltros()"
+            placeholder="Digite o email..."
+          />
+        </div>
+
+        <!-- Filtro por Tipo de Usuário -->
+        <div class="col-md-3">
+          <label class="form-label">Perfil</label>
+          <select
+            class="form-select"
+            [(ngModel)]="filtro.tipoUsuario"
+            (change)="aplicarFiltros()"
+          >
+            <option [ngValue]="null">Todos os perfis</option>
+            <option value="FUNCIONARIO">Funcionário</option>
+            <option value="GERENTE">Administrador</option>
+          </select>
+        </div>
+
+        <!-- Botão Limpar Filtros -->
+        <div class="col-md-2 d-flex align-items-end">
+          <button
+            class="btn btn-outline-secondary w-100"
+            (click)="limparFiltros()"
+            [disabled]="!temFiltrosAtivos()"
+          >
+            Limpar Filtros
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cabeçalho com Contador -->
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>Usuários</h2>
+    <div>
+      <span class="badge bg-info me-2" *ngIf="temFiltrosAtivos()">
+        Filtros ativos
+      </span>
+      <span class="text-muted">
+        {{ usuariosFiltrados.length }} de {{ usuarios.length }} usuários
+      </span>
+      <button class="btn btn-primary ms-3" (click)="novoUsuario()">
+        Novo Usuário
+      </button>
+    </div>
+  </div>
+
+  <!-- Tabela de Usuários -->
+  <table class="table table-striped table-bordered">
+    <thead class="table-dark">
+      <tr>
+        <th>ID</th>
+        <th>Nome</th>
+        <th>Email</th>
+        <th>Perfil</th>
+        <th>Ações</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr *ngFor="let u of usuariosFiltrados">
+        <td>{{ u.id }}</td>
+        <td>{{ u.nome }}</td>
+        <td>{{ u.email }}</td>
+        <td>
+          <span 
+            class="badge" 
+            [class]="u.tipoUsuario === 'GERENTE' ? 'bg-danger' : 'bg-primary'"
+          >
+            {{ u.tipoUsuario === 'GERENTE' ? 'Administrador' : 'Funcionário' }}
+          </span>
+        </td>
+        <td>
+          <button class="btn btn-sm btn-warning me-2" (click)="editar(u)">
+            Editar
+          </button>
+          <button class="btn btn-sm btn-danger" (click)="excluir(u)">
+            Excluir
+          </button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- Mensagem quando não há resultados -->
+  <div *ngIf="usuariosFiltrados.length === 0" class="text-center py-5">
+    <div *ngIf="usuarios.length === 0" class="text-muted">
+      <i class="fas fa-users fa-3x mb-3"></i>
+      <h4>Nenhum usuário cadastrado</h4>
+      <p>Clique em "Novo Usuário" para começar</p>
+    </div>
+    <div
+      *ngIf="usuarios.length > 0 && usuariosFiltrados.length === 0"
+      class="text-warning"
+    >
+      <i class="fas fa-search fa-3x mb-3"></i>
+      <h4>Nenhum usuário encontrado</h4>
+      <p>Tente ajustar os filtros de busca</p>
+      <button class="btn btn-outline-primary mt-2" (click)="limparFiltros()">
+        Limpar todos os filtros
+      </button>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div
+    class="modal"
+    tabindex="-1"
+    id="usuarioModal"
+    [ngStyle]="{ display: usuarioSelecionado ? 'block' : 'none' }"
+  >
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">
+            {{ usuarioSelecionado?.id ? "Editar Usuário" : "Novo Usuário" }}
+          </h5>
+          <button
+            type="button"
+            class="btn-close"
+            (click)="fecharModal()"
+          ></button>
+        </div>
+        <div class="modal-body">
+          <form *ngIf="usuarioSelecionado">
+            <div class="mb-3">
+              <label class="form-label">Nome</label>
+              <input
+                type="text"
+                class="form-control"
+                [(ngModel)]="usuarioSelecionado.nome"
+                name="nome"
+              />
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Email</label>
+              <input
+                type="email"
+                class="form-control"
+                [(ngModel)]="usuarioSelecionado.email"
+                name="email"
+              />
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Senha</label>
+              <input
+                type="password"
+                class="form-control"
+                [(ngModel)]="usuarioSelecionado.senha"
+                name="senha"
+              />
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Perfil</label>
+              <select
+                class="form-select"
+                [(ngModel)]="usuarioSelecionado.tipoUsuario"
+                name="role"
+              >
+                <option value="FUNCIONARIO">Funcionário</option>
+                <option value="GERENTE">Administrador</option>
+              </select>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" (click)="fecharModal()">
+            Cancelar
+          </button>
+          <button class="btn btn-success" (click)="salvar()">Salvar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
