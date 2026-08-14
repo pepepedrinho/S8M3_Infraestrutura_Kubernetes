@@ -152,14 +152,9 @@ jobs:
             --platform managed \
             --quiet
 
-      # Validacao do sucesso do deploy: descobre a URL do servico e exige que
-      # /actuator/health responda 200. O backend exige autenticacao IAM, entao
-      # a requisicao vai assinada com um ID token. As tentativas cobrem o cold
-      # start da primeira revisao.
-      - name: Validar deploy (smoke test)
+      - name: Descobrir a URL do servico
+        id: servico
         run: |
-          set -u
-
           URL=$(gcloud run services describe ${{ env.SERVICE }} \
             --region ${{ env.REGION }} \
             --platform managed \
@@ -169,21 +164,45 @@ jobs:
             echo "Nao foi possivel obter a URL do servico."
             exit 1
           fi
-          echo "Servico publicado em: $URL"
 
-          TOKEN=$(gcloud auth print-identity-token --audiences="$URL" 2>/dev/null || true)
-          if [ -z "$TOKEN" ]; then
-            TOKEN=$(gcloud auth print-identity-token 2>/dev/null || true)
-          fi
-          if [ -z "$TOKEN" ]; then
-            echo "Nao foi possivel obter um ID token para chamar o servico."
-            echo "O backend exige autenticacao IAM, entao a validacao nao pode prosseguir."
+          echo "Servico publicado em: $URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      # O backend exige autenticacao IAM, entao o smoke test precisa de um ID
+      # token com a URL do servico como audiencia.
+      #
+      # Nao da para usar "gcloud auth print-identity-token" aqui: sob Workload
+      # Identity Federation a credencial e uma external account, e o gcloud nao
+      # consegue emitir ID token a partir dela - devolve vazio, com ou sem
+      # --audiences. Quem emite e a propria action de auth, via token_format.
+      # Por isso ela e chamada uma segunda vez, agora que a URL e conhecida.
+      - name: Gerar ID token para o smoke test
+        id: idtoken
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.servico.outputs.url }}
+          id_token_include_email: true
+
+      # Validacao do sucesso do deploy: exige HTTP 200 em /actuator/health.
+      # As tentativas cobrem o cold start da revisao recem-publicada.
+      - name: Validar deploy (smoke test)
+        env:
+          URL: ${{ steps.servico.outputs.url }}
+          ID_TOKEN: ${{ steps.idtoken.outputs.id_token }}
+        run: |
+          set -u
+
+          if [ -z "$ID_TOKEN" ]; then
+            echo "A action de auth nao devolveu um ID token."
             exit 1
           fi
 
           for TENTATIVA in $(seq 1 10); do
             CODIGO=$(curl -s -o corpo.txt -w '%{http_code}' \
-              -H "Authorization: Bearer $TOKEN" \
+              -H "Authorization: Bearer ${ID_TOKEN}" \
               "${URL}/actuator/health" || echo "000")
 
             echo "tentativa ${TENTATIVA}: HTTP ${CODIGO}"
@@ -199,4 +218,6 @@ jobs:
 
           echo "O servico nao respondeu 200 em /actuator/health apos 10 tentativas."
           echo "Ultima resposta: $(cat corpo.txt 2>/dev/null || echo '(vazia)')"
+          echo "Se o codigo for 403, a conta de servico do deploy precisa de"
+          echo "roles/run.invoker no servico ${{ env.SERVICE }}."
           exit 1
