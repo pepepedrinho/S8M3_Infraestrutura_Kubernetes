@@ -5,7 +5,13 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>3.5.4</version>
+		<!-- 3.5.16: ultimo patch da serie 3.5.x. A 3.5.4 arrastava 4 CVEs
+		     CRITICAL detectadas pelo Trivy no CI - tres no tomcat-embed-core
+		     10.1.43 (CVE-2026-41293, CVE-2026-43512, CVE-2026-43515, entre
+		     elas bypass de autenticacao e de autorizacao) e uma no
+		     spring-security-web 6.5.2 (CVE-2026-22732). Este patch traz
+		     tomcat 10.1.55 e spring-security 6.5.11, que corrigem todas. -->
+		<version>3.5.16</version>
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
 	<groupId>br.com.example</groupId>
