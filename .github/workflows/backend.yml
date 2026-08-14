@@ -53,7 +53,7 @@ jobs:
       # e nao sobre a imagem, para que a falha aconteca ANTES do build - do
       # contrario a validacao so ocorreria dentro do job de deploy.
       - name: Vulnerabilidades das dependencias (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: zadinventory-backend/zadinventory
