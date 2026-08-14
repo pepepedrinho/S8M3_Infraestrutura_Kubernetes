@@ -19,14 +19,39 @@ zadinventory-frontend/         projeto Angular + Dockerfile + proxy Go
 
 É o caminho normal de publicação. Cada serviço tem seu próprio workflow, disparado apenas quando a sua pasta muda:
 
-| Workflow | Dispara quando muda | Testa | Publica |
-|---|---|---|---|
-| `backend.yml` | `zadinventory-backend/**` | `mvn -B verify` no Java 17 | Cloud Run `backend` |
-| `frontend.yml` | `zadinventory-frontend/**` | `npm ci` + `npm run build` no Node 22 | Cloud Run `frontend` |
+### Quando cada coisa acontece
 
-**Os testes rodam em push e em pull request. O deploy só acontece em push para `main`.** Num PR o job de publicação aparece como `skipped`, então dá para validar a pipeline inteira sem publicar nada.
+| Evento | Validação | Deploy |
+|---|---|---|
+| Push em **qualquer** branch | ✅ roda | ❌ não |
+| Pull request para `main` | ✅ roda | ❌ não |
+| Push na `main` | ✅ roda | ✅ se a validação passar **e** a pasta do serviço tiver mudado |
 
-Como os filtros são por pasta, um commit que mexe só no frontend não reconstrói o backend.
+Os gatilhos **não** usam filtro de `paths`, de propósito. Com filtro por pasta, um PR que mexe apenas no frontend nunca dispararia o workflow do backend, e um status check obrigatório ficaria preso em "Expected" para sempre, travando o merge. A economia de não republicar um serviço que não mudou é feita depois, pelo job `detectar-alteracoes`, que compara o commit anterior com o atual.
+
+### O que é validado
+
+Toda validação vive no job `test`. Como `build-and-deploy` declara `needs: test`, **qualquer falha aqui impede automaticamente o build da imagem e o deploy** — não existe caminho que publique sem passar por tudo isto:
+
+| | Backend | Frontend |
+|---|---|---|
+| Testes | `mvn -B verify` — 93 unitários + 50 integração | `npm run test:ci` — 32 specs em ChromeHeadless |
+| Análise estática | SpotBugs (falha em qualquer achado novo) | ESLint (falha em qualquer erro) |
+| Vulnerabilidades | Trivy `fs` sobre as dependências Maven | `npm audit --omit=dev` |
+| Build | dentro do `mvn verify` | `npm run build` |
+
+### Validação do deploy
+
+Publicar não é o fim: depois do `gcloud run deploy`, cada workflow descobre a URL do serviço e faz uma requisição HTTP real, repetindo até 10 vezes para cobrir o cold start. **Se o serviço não responder 200, o job falha** mesmo que o deploy tenha sido aceito.
+
+No backend a chamada vai em `/actuator/health`, assinada com um ID token — o serviço exige autenticação IAM. Como o health agrega o indicador do banco, um 200 ali prova que a aplicação subiu **e** alcança o Cloud SQL.
+
+### Dívida técnica registrada
+
+Duas validações começam com exceções documentadas, para não reprovar código que já estava no projeto:
+
+- **SpotBugs** ignora `EI_EXPOSE_REP`/`EI_EXPOSE_REP2` (38 de 38 ocorrências iniciais), inerentes a entidades JPA com Lombok. Fora essas, o gate está em zero. Ver [`spotbugs-exclude.xml`](zadinventory-backend/zadinventory/spotbugs-exclude.xml).
+- **ESLint** rebaixa a aviso 7 regras com 64 ocorrências herdadas, 43 delas de acessibilidade em templates. O script usa `--max-warnings 64`, então o número não pode crescer. Ver [`eslint.config.js`](zadinventory-frontend/eslint.config.js).
 
 ### Identificação das imagens
 

@@ -1,20 +1,20 @@
 name: Frontend CI/CD
 
+# Comportamento dos gatilhos:
+#   push em QUALQUER branch -> job "test" (validacao completa), sem deploy
+#   pull request para main  -> job "test", sem deploy
+#   push na main            -> job "test" e, se passar, build + push + deploy
+#
+# Nao existe filtro de "paths" aqui, e isso e proposital. Com filtro por pasta,
+# um PR que mexe apenas no backend nunca dispararia este workflow, e um status
+# check obrigatorio ficaria preso em "Expected" para sempre, travando o merge.
+# A economia de nao republicar um servico que nao mudou e feita no job
+# "detectar-alteracoes", e nao no gatilho.
 on:
   push:
-    branches:
-      - main
-      - arrumando-back-lixo
-    paths:
-      - "zadinventory-frontend/**"
-      - ".github/workflows/frontend.yml"
-
   pull_request:
     branches:
       - main
-    paths:
-      - "zadinventory-frontend/**"
-      - ".github/workflows/frontend.yml"
 
 env:
   PROJECT_ID: project-bb29153a-91af-47dd-8df
@@ -24,6 +24,9 @@ env:
   SERVICE_ACCOUNT: frontend-cloud-run@project-bb29153a-91af-47dd-8df.iam.gserviceaccount.com
 
 jobs:
+  # Todas as validacoes ficam neste job. Como "build-and-deploy" declara
+  # needs: test, qualquer falha aqui - lint, teste, build ou vulnerabilidade -
+  # impede automaticamente o build da imagem e o deploy.
   test:
     name: Test Frontend
     runs-on: ubuntu-latest
@@ -46,16 +49,75 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Reprova em qualquer erro. As 64 ocorrencias herdadas do codigo atual
+      # estao rebaixadas a aviso no eslint.config.js, com teto fixo via
+      # --max-warnings: o build tambem falha se esse numero crescer.
+      - name: Lint
+        run: npm run lint
+
+      # Usa o script test:ci em vez de passar flags na linha de comando: o
+      # repasse de argumentos por "npm test --" e fragil e falha silenciosamente
+      # em alguns shells, deixando o Karma em modo watch e travando o job.
+      # O script fixa --watch=false e --browsers=ChromeHeadless.
+      - name: Run tests
+        run: npm run test:ci
+
       - name: Build Angular application
         run: npm run build
+
+      # --omit=dev porque as dependencias de desenvolvimento (karma, webpack-dev-server)
+      # nao entram na imagem final, que e um nginx servindo arquivos estaticos.
+      # O nivel critical e o que o projeto sustenta hoje; subir para high exige
+      # antes tratar as vulnerabilidades herdadas do express.
+      - name: Vulnerabilidades das dependencias (npm audit)
+        run: npm audit --omit=dev --audit-level=critical
+
+  # Descobre se o frontend realmente mudou neste push. Sem isso, como o gatilho
+  # nao tem mais filtro de pasta, um commit que mexe so na documentacao ou so
+  # no backend republicaria o frontend sem necessidade.
+  detectar-alteracoes:
+    name: Detectar alteracoes no frontend
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      mudou: ${{ steps.diff.outputs.mudou }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Comparar com o commit anterior
+        id: diff
+        run: |
+          ANTERIOR="${{ github.event.before }}"
+
+          # Branch nova, force-push ou commit ausente: sem base de comparacao
+          # confiavel, assume que mudou para nao pular um deploy legitimo.
+          if [ -z "$ANTERIOR" ] \
+            || [ "$ANTERIOR" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "${ANTERIOR}^{commit}" 2>/dev/null; then
+            echo "Sem base de comparacao; tratando como alterado."
+            echo "mudou=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git diff --quiet "$ANTERIOR" "${{ github.sha }}" -- \
+              zadinventory-frontend/ .github/workflows/frontend.yml; then
+            echo "Nada mudou no frontend; deploy sera pulado."
+            echo "mudou=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Frontend alterado; deploy sera executado."
+            echo "mudou=true" >> "$GITHUB_OUTPUT"
+          fi
 
   build-and-deploy:
     name: Build and Deploy Frontend
     runs-on: ubuntu-latest
 
-    needs: test
+    needs: [test, detectar-alteracoes]
 
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: needs.detectar-alteracoes.outputs.mudou == 'true'
 
     permissions:
       contents: read
@@ -99,3 +161,47 @@ jobs:
             --service-account ${{ env.SERVICE_ACCOUNT }} \
             --platform managed \
             --quiet
+
+      # Validacao do sucesso do deploy: descobre a URL do servico e exige que a
+      # pagina responda 200. Tenta primeiro sem autenticacao, porque o frontend
+      # e o servico publico; se o IAM barrar, repete com um ID token.
+      - name: Validar deploy (smoke test)
+        run: |
+          set -u
+
+          URL=$(gcloud run services describe ${{ env.SERVICE }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --format 'value(status.url)')
+
+          if [ -z "$URL" ]; then
+            echo "Nao foi possivel obter a URL do servico."
+            exit 1
+          fi
+          echo "Servico publicado em: $URL"
+
+          for TENTATIVA in $(seq 1 10); do
+            CODIGO=$(curl -s -o corpo.txt -w '%{http_code}' "$URL/" || echo "000")
+
+            if [ "$CODIGO" = "401" ] || [ "$CODIGO" = "403" ]; then
+              TOKEN=$(gcloud auth print-identity-token --audiences="$URL" 2>/dev/null \
+                || gcloud auth print-identity-token 2>/dev/null || true)
+              if [ -n "$TOKEN" ]; then
+                CODIGO=$(curl -s -o corpo.txt -w '%{http_code}' \
+                  -H "Authorization: Bearer $TOKEN" "$URL/" || echo "000")
+              fi
+            fi
+
+            echo "tentativa ${TENTATIVA}: HTTP ${CODIGO}"
+
+            if [ "$CODIGO" = "200" ]; then
+              echo "Deploy validado: a aplicacao respondeu com sucesso."
+              exit 0
+            fi
+
+            sleep 10
+          done
+
+          echo "O servico nao respondeu 200 apos 10 tentativas."
+          echo "Ultimo codigo: ${CODIGO}"
+          exit 1
