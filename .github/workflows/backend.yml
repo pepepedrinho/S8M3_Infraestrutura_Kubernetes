@@ -1,20 +1,20 @@
 name: Backend CI/CD
 
+# Comportamento dos gatilhos:
+#   push em QUALQUER branch -> job "test" (validacao completa), sem deploy
+#   pull request para main  -> job "test", sem deploy
+#   push na main            -> job "test" e, se passar, build + push + deploy
+#
+# Nao existe filtro de "paths" aqui, e isso e proposital. Com filtro por pasta,
+# um PR que mexe apenas no frontend nunca dispararia este workflow, e um status
+# check obrigatorio ficaria preso em "Expected" para sempre, travando o merge.
+# A economia de nao republicar um servico que nao mudou e feita no job
+# "detectar-alteracoes", e nao no gatilho.
 on:
   push:
-    branches:
-      - main
-      - arrumando-back-lixo
-    paths:
-      - "zadinventory-backend/**"
-      - ".github/workflows/backend.yml"
-
   pull_request:
     branches:
       - main
-    paths:
-      - "zadinventory-backend/**"
-      - ".github/workflows/backend.yml"
 
 env:
   PROJECT_ID: project-bb29153a-91af-47dd-8df
@@ -24,13 +24,12 @@ env:
   SERVICE_ACCOUNT: backend-cloud-run@project-bb29153a-91af-47dd-8df.iam.gserviceaccount.com
 
 jobs:
+  # Todas as validacoes ficam neste job. Como "build-and-deploy" declara
+  # needs: test, qualquer falha aqui - teste, analise estatica ou
+  # vulnerabilidade - impede automaticamente o build da imagem e o deploy.
   test:
     name: Test Backend
     runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: zadinventory-backend/zadinventory
 
     steps:
       - name: Checkout repository
@@ -47,15 +46,68 @@ jobs:
       # .mvn/wrapper), entao ./mvnw nao consegue nem gravar o jar que baixa.
       # verify roda surefire (unitarios) e failsafe (integracao).
       - name: Run tests
+        working-directory: zadinventory-backend/zadinventory
         run: mvn -B verify
+
+      # Escaneia as dependencias Maven declaradas no pom. Roda em modo "fs",
+      # e nao sobre a imagem, para que a falha aconteca ANTES do build - do
+      # contrario a validacao so ocorreria dentro do job de deploy.
+      - name: Vulnerabilidades das dependencias (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: zadinventory-backend/zadinventory
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          scanners: vuln
+
+  # Descobre se o backend realmente mudou neste push. Sem isso, como o gatilho
+  # nao tem mais filtro de pasta, um commit que mexe so na documentacao ou so
+  # no frontend republicaria o backend sem necessidade.
+  detectar-alteracoes:
+    name: Detectar alteracoes no backend
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      mudou: ${{ steps.diff.outputs.mudou }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Comparar com o commit anterior
+        id: diff
+        run: |
+          ANTERIOR="${{ github.event.before }}"
+
+          # Branch nova, force-push ou commit ausente: sem base de comparacao
+          # confiavel, assume que mudou para nao pular um deploy legitimo.
+          if [ -z "$ANTERIOR" ] \
+            || [ "$ANTERIOR" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "${ANTERIOR}^{commit}" 2>/dev/null; then
+            echo "Sem base de comparacao; tratando como alterado."
+            echo "mudou=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git diff --quiet "$ANTERIOR" "${{ github.sha }}" -- \
+              zadinventory-backend/ .github/workflows/backend.yml; then
+            echo "Nada mudou no backend; deploy sera pulado."
+            echo "mudou=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Backend alterado; deploy sera executado."
+            echo "mudou=true" >> "$GITHUB_OUTPUT"
+          fi
 
   build-and-deploy:
     name: Build and Deploy Backend
     runs-on: ubuntu-latest
 
-    needs: test
+    needs: [test, detectar-alteracoes]
 
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: needs.detectar-alteracoes.outputs.mudou == 'true'
 
     permissions:
       contents: read
@@ -99,3 +151,52 @@ jobs:
             --service-account ${{ env.SERVICE_ACCOUNT }} \
             --platform managed \
             --quiet
+
+      # Validacao do sucesso do deploy: descobre a URL do servico e exige que
+      # /actuator/health responda 200. O backend exige autenticacao IAM, entao
+      # a requisicao vai assinada com um ID token. As tentativas cobrem o cold
+      # start da primeira revisao.
+      - name: Validar deploy (smoke test)
+        run: |
+          set -u
+
+          URL=$(gcloud run services describe ${{ env.SERVICE }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --format 'value(status.url)')
+
+          if [ -z "$URL" ]; then
+            echo "Nao foi possivel obter a URL do servico."
+            exit 1
+          fi
+          echo "Servico publicado em: $URL"
+
+          TOKEN=$(gcloud auth print-identity-token --audiences="$URL" 2>/dev/null || true)
+          if [ -z "$TOKEN" ]; then
+            TOKEN=$(gcloud auth print-identity-token 2>/dev/null || true)
+          fi
+          if [ -z "$TOKEN" ]; then
+            echo "Nao foi possivel obter um ID token para chamar o servico."
+            echo "O backend exige autenticacao IAM, entao a validacao nao pode prosseguir."
+            exit 1
+          fi
+
+          for TENTATIVA in $(seq 1 10); do
+            CODIGO=$(curl -s -o corpo.txt -w '%{http_code}' \
+              -H "Authorization: Bearer $TOKEN" \
+              "${URL}/actuator/health" || echo "000")
+
+            echo "tentativa ${TENTATIVA}: HTTP ${CODIGO}"
+
+            if [ "$CODIGO" = "200" ]; then
+              echo "Resposta: $(cat corpo.txt)"
+              echo "Deploy validado: o servico respondeu com sucesso."
+              exit 0
+            fi
+
+            sleep 10
+          done
+
+          echo "O servico nao respondeu 200 em /actuator/health apos 10 tentativas."
+          echo "Ultima resposta: $(cat corpo.txt 2>/dev/null || echo '(vazia)')"
+          exit 1

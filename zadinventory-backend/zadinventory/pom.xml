@@ -72,6 +72,13 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-web</artifactId>
 		</dependency>
+		<!-- Expoe /actuator/health, usado pelo workflow para validar o deploy
+		     no Cloud Run. Apenas o endpoint health e exposto (ver
+		     application.properties). -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
 
 		<dependency>
 			<groupId>com.mysql</groupId>
@@ -173,6 +180,32 @@
 						<configuration>
 							<outputDirectory>target/jacoco-report</outputDirectory>
 						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+
+			<!-- SpotBugs: analise estatica de bytecode, focada em bugs reais
+			     (NPE, recursos nao fechados, comparacoes suspeitas) e nao em
+			     estilo, o que mantem o ruido baixo. -->
+			<plugin>
+				<groupId>com.github.spotbugs</groupId>
+				<artifactId>spotbugs-maven-plugin</artifactId>
+				<version>4.8.6.6</version>
+				<configuration>
+					<effort>Max</effort>
+					<threshold>Medium</threshold>
+					<includeTests>false</includeTests>
+					<excludeFilterFile>spotbugs-exclude.xml</excludeFilterFile>
+				</configuration>
+				<executions>
+					<!-- Ligado ao verify, a mesma fase que o CI executa: um
+					     achado novo reprova o build e bloqueia o deploy. -->
+					<execution>
+						<id>spotbugs-check</id>
+						<phase>verify</phase>
+						<goals>
+							<goal>check</goal>
+						</goals>
 					</execution>
 				</executions>
 			</plugin>

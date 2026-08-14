@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Exclusoes do SpotBugs.
+
+  EI_EXPOSE_REP e EI_EXPOSE_REP2 ("pode expor a representacao interna ao
+  retornar/armazenar referencia a objeto mutavel") respondiam por 38 das 38
+  ocorrencias encontradas na primeira execucao - ou seja, 100% do ruido.
+
+  Nao sao defeitos neste projeto: aparecem em todo getter e setter que o Lombok
+  gera nas entidades JPA que referenciam outras entidades ou datas, e na
+  injecao por construtor dos controllers. Corrigir exigiria copia defensiva em
+  entidades gerenciadas pelo Hibernate, o que quebraria o lazy loading e o
+  controle de mudancas da JPA.
+
+  Com essas duas fora, a analise fica em zero ocorrencias, e o build passa a
+  falhar em QUALQUER achado novo - que e o objetivo do gate.
+-->
+<FindBugsFilter>
+    <Match>
+        <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2"/>
+    </Match>
+</FindBugsFilter>
