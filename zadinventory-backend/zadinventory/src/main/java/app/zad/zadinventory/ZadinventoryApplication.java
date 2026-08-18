@@ -10,4 +10,6 @@ public class ZadinventoryApplication {
 		SpringApplication.run(ZadinventoryApplication.class, args);
 	}
 
+	// Lipe
+
 }
