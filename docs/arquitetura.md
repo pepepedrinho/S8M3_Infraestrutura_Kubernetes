@@ -1,8 +1,8 @@
 # Arquitetura do ZadInventory na Google Cloud — Entrega 1
 
-> Projeto Integrador · Uniamérica Descomplica · Prof. Gildomiro Bairros · 
+> Projeto Integrador · Uniamérica Descomplica · Prof. Gildomiro Bairros · **Grupo 6**
 >
-> Este documento é o projeto integrador da infraestrutura que será implantada via Terraform na Entrega 2 (22/11/2026). Nada aqui precisa estar rodando agora. Os ADRs estão em [`adr/`](adr/), o diagrama em [`diagramas/`](diagramas/) e a estimativa de custos em [`custos/`](custos/).
+> Este documento é o **projeto** da infraestrutura que será implantada via Terraform na Entrega 2 (22/11/2026). Nada aqui precisa estar rodando agora. Os ADRs estão em [`adr/`](adr/), o diagrama em [`diagramas/`](diagramas/) e a estimativa de custos em [`custos/`](custos/).
 
 ---
 
@@ -82,7 +82,8 @@ Por isso chamamos `zad-publica` de "pública" e `zad-privada` de "privada": o no
 Comando de exemplo do fluxo 2:
 
 ```bash
-ssh -J usuario@<IP_EXTERNO_BASTION> usuario@10.10.2.10
+# BASTION_IP = IP externo do bastion (muda a cada recriação)
+ssh -J usuario@$BASTION_IP usuario@10.10.2.10
 ```
 
 ---
@@ -193,7 +194,7 @@ Regras implícitas da GCP, que não podem ser apagadas: **nega toda entrada** (p
 
 | Camada | Tecnologia | Versão | Justificativa |
 |---|---|---|---|
-| Provedor | Google Cloud Platform | — | VPC com sub-redes, Cloud NAT gerenciado, IP externo e firewall por instância, tudo com suporte no Terraform. O grupo já tem o projeto e crédito na GCP |
+| Provedor | Google Cloud Platform | — | VPC com sub-redes, Cloud NAT gerenciado, IP externo e firewall por instância, tudo com suporte no Terraform. O grupo já tem conta e projeto na GCP |
 | Região | `southamerica-east1` (São Paulo), zona `-a` | — | Ver justificativa abaixo |
 | Sistema operacional | Ubuntu Server LTS (imagem `ubuntu-2404-lts-amd64`) | 24.04 LTS | Suporte até 2029, pacotes de Nginx, OpenJDK e certbot no repositório oficial, e familiaridade do grupo |
 | Runtime do backend | OpenJDK JRE headless | 17 | Mesma versão usada no build (`java.version=17` no `pom.xml`) e no CI |
@@ -216,7 +217,7 @@ Regras implícitas da GCP, que não podem ser apagadas: **nega toda entrada** (p
 | **Disponibilidade de serviços** | Compute Engine, Cloud NAT, IP estático, snapshots de disco e 3 zonas disponíveis: tudo o que a Entrega 2 exige (implantação, HA em mais de uma zona e backup) | Também disponíveis |
 | **Dados** | Ficam no Brasil (alinhado à LGPD para dados de clientes/vendas) | Fora do país |
 
-Escolhemos São Paulo por **latência** e **localização dos dados**. O free tier cobriria só **uma** das quatro VMs, então a economia real da região americana seria pequena. No cenário B (seção 5.9) pagamos apenas ~50 horas, então a diferença de preço por hora entre as regiões resulta em poucos dólares no total. O deploy atual em Cloud Run também já está nessa região.
+Escolhemos São Paulo por **latência** e **localização dos dados**. O free tier cobriria só **uma** das quatro VMs, então a economia real da região americana seria pequena. No cenário B (seção 5.9) pagamos apenas ~100 horas por VM, então a diferença de preço por hora entre as regiões resulta em poucos dólares no total. O deploy atual em Cloud Run também já está nessa região.
 
 ---
 
@@ -253,9 +254,11 @@ As VMs `e2-micro` e `e2-small` têm **núcleo compartilhado**: garantem uma fra�
 
 ## 5.9 Estimativa de custos
 
-> Os valores finais saem da **Google Cloud Pricing Calculator**. O link da estimativa e o PDF exportado ficam em [`custos/`](custos/). Os valores abaixo marcados com "calc." devem ser copiados da calculadora; os valores do Cloud NAT e dos IPs usam o preço de tabela conferido em setembro de 2026.
+> Valores da **Google Cloud Pricing Calculator**, com preços vigentes em 29/09/2026. A exportação (CSV) e os links ficam em [`custos/`](custos/).
 
-**Link da calculadora:** `<COLAR AQUI O LINK DA ESTIMATIVA>`
+**Link da calculadora — cenário A:** <https://cloud.google.com/calculator?dl=CjhDaVJqTVRjMFpXWmxOQzFpTkRRM0xUUTFOekF0T0dFMk55MDJORFE0TWprMU9ERTNZak1RQVE9PRokMjk0QzgxQUItRTBGQS00NkExLUExRUYtRjYxNkMxNEIwMEVD>
+
+**Link da calculadora — cenário B:** <https://cloud.google.com/products/calculator?dl=CjhDaVEwTldObE9HRTNPUzFtTlRRMExUUTBOV1V0T1dabE1DMDBOakZoWTJNM1pXWTJNRGtRQVE9PRAIGiRDQjk3NDhBMS0wOUQyLTQ4NUQtOERDRS1DQTA2MDk0NDZDMUU>
 
 ### Itens de custo
 
@@ -265,54 +268,63 @@ As VMs `e2-micro` e `e2-small` têm **núcleo compartilhado**: garantem uma fra�
 | VM e2-small (backend, db) | 2 | Por hora ligada |
 | Disco `pd-standard` 10 GB | 2 | Por GB-mês, enquanto o disco **existir**, mesmo com a VM parada |
 | Disco `pd-balanced` 20 GB | 2 | Por GB-mês, enquanto existir |
-| IP externo em VM (bastion + frontend) | 2 | US$ 0,005/h cada |
+| IP externo em VM (bastion + frontend) | 2 | US$ 0,0025/h cada |
 | Cloud NAT — gateway | 1 (2 VMs usando) | US$ 0,0014 por VM/h |
 | Cloud NAT — IP externo do NAT | 1 | US$ 0,005/h |
 | Cloud NAT — dados processados | ~2 GiB/mês | US$ 0,045/GiB (entrada e saída) |
-| Egress para a internet | ~1–2 GiB/mês | Por GiB, a partir de ~US$ 0,12, além da franquia |
+| Egress para a internet | ~2 GiB/mês | ~US$ 0,19/GiB a partir de São Paulo |
 
 ### Cenário A — operação contínua (730 h/mês, 24×7)
 
 | Item | Custo mensal |
 |---|---|
-| 2× e2-micro | US$ __ (calc.) |
-| 2× e2-small | US$ __ (calc.) |
-| Discos (2× 10 GB standard + 2× 20 GB balanced) | US$ __ (calc.) |
-| 2 IPs externos das VMs: 2 × 0,005 × 730 | US$ 7,30 |
-| Cloud NAT gateway + IP: (2 × 0,0014 + 0,005) × 730 | US$ 5,69 |
-| Cloud NAT dados: 2 GiB × 0,045 | US$ 0,09 |
-| Egress | US$ __ (calc.) |
-| **Total** | **US$ __ (calc.)** |
+| 2× e2-micro (vCPU + RAM) | US$ 19,41 |
+| 2× e2-small (vCPU + RAM) | US$ 38,83 |
+| Discos: 2× 10 GB standard + 2× 20 GB balanced | US$ 7,20 |
+| 2 IPs externos das VMs | US$ 3,65 |
+| Cloud NAT: gateway (2 VMs) | US$ 2,04 |
+| Cloud NAT: IP do gateway | US$ 3,65 |
+| Cloud NAT: dados processados (2 GiB) | US$ 0,09 |
+| Egress para a internet (2 GiB, São Paulo → América do Sul) | US$ 0,38 |
+| **Total** | **US$ 75,25** |
 
 ### Cenário B — só as horas ligadas na Entrega 2 (o que o grupo vai pagar)
 
-Premissa de uso: **10 sessões de testes de ~4 h** entre outubro e novembro, mais **~10 h** no dia da apresentação (23/11), com o ambiente subido de manhã e destruído à noite. Total: **~50 h**. Entre as sessões o ambiente é **destruído** com `terraform destroy`, então discos e IPs também só existem nessas horas.
+Premissa de uso: **~100 horas por VM** entre outubro e 23/11, ou seja, cerca de **22 sessões de trabalho de ~4 h** (implantação, testes de segurança, HA e backup), mais **~12 h** no dia da apresentação, com o ambiente subido no início da sessão e destruído ao final. A premissa é propositalmente folgada: o grupo ainda está aprendendo Terraform, e subestimar as horas seria subestimar o que vamos pagar.
 
-| Item | Custo no período |
-|---|---|
-| 2× e2-micro × 50 h | US$ __ (calc.) |
-| 2× e2-small × 50 h | US$ __ (calc.) |
-| Discos (proporcional a 50 h) | US$ __ (calc.) |
-| IPs externos das VMs: 2 × 0,005 × 50 | US$ 0,50 |
-| Cloud NAT gateway + IP: 0,0078 × 50 | US$ 0,39 |
-| Cloud NAT dados (instalações de pacotes: ~1,5 GiB) | US$ 0,07 |
-| **Total** | **US$ __ (calc.)** |
+A calculadora foi usada com as VMs em 100 h cada. Dois ajustes foram feitos à mão, porque a calculadora não permite informar horas nesses itens:
+
+- **IP Address e NAT Gateway** não têm campo de horas e são sempre cotados como mês cheio (730 h). Como o ambiente é destruído entre as sessões, IPs e NAT só existem nas mesmas ~100 h das VMs, então usamos **valor mensal da calculadora × 100 / 730**.
+- **Dados processados pelo NAT e egress** são cobrados por volume, não por hora, então ficam iguais aos da calculadora.
+
+| Item | Na calculadora | Custo considerado |
+|---|---|---|
+| 2× e2-micro, 100 h cada (vCPU + RAM) | US$ 2,66 | US$ 2,66 |
+| 2× e2-small, 100 h cada (vCPU + RAM) | US$ 5,32 | US$ 5,32 |
+| Discos (standard + balanced) | US$ 3,60 | US$ 3,60 |
+| 2 IPs externos das VMs | US$ 3,65 (mês cheio) | US$ 0,50 (3,65 × 100/730) |
+| Cloud NAT: gateway + IP | US$ 5,69 (mês cheio) | US$ 0,78 (5,69 × 100/730) |
+| Cloud NAT: dados processados (2 GiB) | US$ 0,09 | US$ 0,09 |
+| Egress para a internet (2 GiB) | US$ 0,38 | US$ 0,38 |
+| **Total** | **US$ 21,39** | **US$ 13,33** |
+
+O valor que o grupo espera pagar é **~US$ 13,33**. O total bruto da calculadora, US$ 21,39, é o teto: é quanto pagaríamos se, por erro, IPs e NAT ficassem ligados o mês inteiro sem as VMs. O plano de controle abaixo existe para evitar exatamente isso.
 
 ### Item mais caro e como reduzir
 
-O item mais caro é o **par de VMs e2-small** (backend e banco): elas concentram a maior parte do custo de computação nos dois cenários. O Cloud NAT, que costuma ser o vilão, fica em ~US$ 6/mês aqui porque só 2 VMs o usam e o tráfego é pequeno. *(Confirmar a ordem com os valores da calculadora.)*
+O item mais caro é o **par de VMs e2-small** (backend e banco): US$ 44,83/mês com os discos, cerca de **60% do total** do cenário A, e US$ 8,32 (~62%) do cenário B. O Cloud NAT, que costuma ser o vilão, fica em US$ 5,78/mês aqui porque só 2 VMs o usam e o tráfego é pequeno.
 
 | Redução possível | Economia | O que se perde |
 |---|---|---|
 | Juntar backend e banco numa única e2-medium | 1 VM a menos e 1 VM a menos no NAT | Isolamento entre aplicação e banco. A regra `allow-mysql` perde sentido, e uma falha na aplicação derruba o banco junto |
 | Rebaixar o banco para e2-micro com swap | Parte do custo de uma VM | Desempenho: *buffer pool* menor e risco de lentidão/OOM |
 | Mudar para `us-east1` | Preço menor e 1 e2-micro grátis | Latência (~150 ms) e dados fora do Brasil |
-| Ligar só durante os testes (**adotado**) | Paga ~50 h em vez de 730 h | O ambiente não fica disponível entre as sessões; os dados de teste são recriados a cada subida |
+| Ligar só durante os testes (**adotado**) | Paga ~100 h por VM em vez de 730 h | O ambiente não fica disponível entre as sessões; os dados de teste são recriados a cada subida |
 
 ### Uso de nível gratuito
 
 - **Always Free (e2-micro): não aproveitado.** Ele só vale em `us-west1`, `us-central1` e `us-east1`, e escolhemos `southamerica-east1` (ver 5.6).
-- **Crédito de avaliação da GCP (US$ 300 por 90 dias, conta nova): `<usado / não disponível>`.** A instituição não oferece créditos; este é um benefício da conta do grupo no Google. Se o crédito foi ativado antes de ~25/08/2026, o crédito expira antes de 23/11, e o cenário B será pago em dinheiro. *(Confirmar no Billing a data de expiração.)*
+- **Crédito de avaliação da GCP: não disponível.** A conta de faturamento do grupo está em teste gratuito, mas o crédito depende de um pré-pagamento que não foi feito, e nenhum crédito aparece em Faturamento → Créditos (conferido em 29/09/2026). A instituição também não oferece créditos. Portanto, **todo o custo do cenário B será pago pelo grupo**, e o plano de controle de custos abaixo é o que garante que o valor fique perto do estimado.
 
 ### Estratégia de recriação: custo × esforço
 
