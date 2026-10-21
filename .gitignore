@@ -43,3 +43,17 @@ typings/
 # System files
 .DS_Store
 Thumbs.db
+
+# Variáveis de ambiente e configurações locais
+.env
+.env.*
+!.env.example
+
+# Credenciais e chaves privadas
+**/*service-account*.json
+**/credentials*.json
+*.pem
+*.key
+
+# Logs
+*.log

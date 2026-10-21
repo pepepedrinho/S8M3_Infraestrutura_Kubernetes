@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zadinventory-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: zadinventory-backend
+  template:
+    metadata:
+      labels:
+        app: zadinventory-backend
+    spec:
+      initContainers:
+      - name: wait-db
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z zadinventory-db 3306; do echo aguardando banco; sleep 2; done']
+      containers:
+      - name: backend
+        image: zadinventory-backend:local
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: zadinventory-config
+        - secretRef:
+            name: zadinventory-secret
+        resources:
+          requests:
+            memory: 384Mi
+            cpu: 100m
+          limits:
+            memory: 768Mi
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          initialDelaySeconds: 40
+          periodSeconds: 10
+          failureThreshold: 12
+        livenessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          initialDelaySeconds: 90
+          periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zadinventory-backend
+spec:
+  selector:
+    app: zadinventory-backend
+  ports:
+  - port: 8080
+    targetPort: 8080

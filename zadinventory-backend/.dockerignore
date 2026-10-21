@@ -1,0 +1,10 @@
+**/target
+**/*.log
+**/.env
+**/.env.*
+**/*service-account*.json
+**/credentials*.json
+.git
+.gitignore
+.vscode
+.idea

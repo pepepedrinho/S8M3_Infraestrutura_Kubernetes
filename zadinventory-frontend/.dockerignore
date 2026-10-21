@@ -1,9 +1,9 @@
-node_modules
-dist
+**/node_modules
+**/dist
+**/.angular
+**/coverage
+**/*.log
 .git
 .gitignore
 .vscode
 .idea
-.angular
-coverage
-*.log
