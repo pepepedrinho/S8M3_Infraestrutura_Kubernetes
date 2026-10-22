@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: zadinventory-admin
+type: Opaque
+stringData:
+  ADMIN_NOME: "Administrador"
+  ADMIN_EMAIL: "admin@admin.com"
+  ADMIN_SENHA: "admin"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: zadinventory-seed-admin
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: seed
+        image: curlimages/curl:8.10.1
+        envFrom:
+        - secretRef:
+            name: zadinventory-admin
+        command: ["sh", "-c"]
+        args:
+        - |
+          until curl -sf http://zadinventory-backend:8080/actuator/health > /dev/null; do echo "aguardando backend"; sleep 3; done
+          curl -s -o /dev/null -w "HTTP %{http_code}\n" -X POST http://zadinventory-backend:8080/api/usuarios/criar-inicial \
+            -H "Content-Type: application/json" \
+            -d "{\"nome\":\"$ADMIN_NOME\",\"email\":\"$ADMIN_EMAIL\",\"senha\":\"$ADMIN_SENHA\",\"tipoUsuario\":\"GERENTE\"}"

@@ -1,39 +1,26 @@
-name: Frontend CI/CD
+name: Frontend CI
 
-# Comportamento dos gatilhos:
-#   push em QUALQUER branch -> job "test" (validacao completa), sem deploy
-#   pull request para main  -> job "test", sem deploy
-#   push na main            -> job "test" e, se passar, build + push + deploy
-#
-# Nao existe filtro de "paths" aqui, e isso e proposital. Com filtro por pasta,
-# um PR que mexe apenas no backend nunca dispararia este workflow, e um status
-# check obrigatorio ficaria preso em "Expected" para sempre, travando o merge.
-# A economia de nao republicar um servico que nao mudou e feita no job
-# "detectar-alteracoes", e nao no gatilho.
 on:
   push:
   pull_request:
     branches:
       - main
 
-env:
-  PROJECT_ID: project-bb29153a-91af-47dd-8df
-  REGION: southamerica-east1
-  SERVICE: frontend
-  IMAGE: southamerica-east1-docker.pkg.dev/project-bb29153a-91af-47dd-8df/zadinventory/frontend
-  SERVICE_ACCOUNT: frontend-cloud-run@project-bb29153a-91af-47dd-8df.iam.gserviceaccount.com
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  # Todas as validacoes ficam neste job. Como "build-and-deploy" declara
-  # needs: test, qualquer falha aqui - lint, teste, build ou vulnerabilidade -
-  # impede automaticamente o build da imagem e o deploy.
   test:
     name: Test Frontend
     runs-on: ubuntu-latest
 
     defaults:
       run:
-        working-directory: zadinventory-frontend
+        working-directory: zadinventory-frontend/zadinventory
 
     steps:
       - name: Checkout repository
@@ -44,164 +31,84 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: zadinventory-frontend/package-lock.json
+          cache-dependency-path: zadinventory-frontend/zadinventory/package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
-      # Reprova em qualquer erro. As 64 ocorrencias herdadas do codigo atual
-      # estao rebaixadas a aviso no eslint.config.js, com teto fixo via
-      # --max-warnings: o build tambem falha se esse numero crescer.
       - name: Lint
         run: npm run lint
 
-      # Usa o script test:ci em vez de passar flags na linha de comando: o
-      # repasse de argumentos por "npm test --" e fragil e falha silenciosamente
-      # em alguns shells, deixando o Karma em modo watch e travando o job.
-      # O script fixa --watch=false e --browsers=ChromeHeadless.
       - name: Run tests
         run: npm run test:ci
 
       - name: Build Angular application
         run: npm run build
 
-      # --omit=dev porque as dependencias de desenvolvimento (karma, webpack-dev-server)
-      # nao entram na imagem final, que e um nginx servindo arquivos estaticos.
-      # O nivel critical e o que o projeto sustenta hoje; subir para high exige
-      # antes tratar as vulnerabilidades herdadas do express.
       - name: Vulnerabilidades das dependencias (npm audit)
         run: npm audit --omit=dev --audit-level=critical
 
-  # Descobre se o frontend realmente mudou neste push. Sem isso, como o gatilho
-  # nao tem mais filtro de pasta, um commit que mexe so na documentacao ou so
-  # no backend republicaria o frontend sem necessidade.
-  detectar-alteracoes:
-    name: Detectar alteracoes no frontend
+  docker:
+    name: Docker build and smoke test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    outputs:
-      mudou: ${{ steps.diff.outputs.mudou }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    needs: test
 
-      - name: Comparar com o commit anterior
-        id: diff
-        run: |
-          ANTERIOR="${{ github.event.before }}"
-
-          # Branch nova, force-push ou commit ausente: sem base de comparacao
-          # confiavel, assume que mudou para nao pular um deploy legitimo.
-          if [ -z "$ANTERIOR" ] \
-            || [ "$ANTERIOR" = "0000000000000000000000000000000000000000" ] \
-            || ! git cat-file -e "${ANTERIOR}^{commit}" 2>/dev/null; then
-            echo "Sem base de comparacao; tratando como alterado."
-            echo "mudou=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if git diff --quiet "$ANTERIOR" "${{ github.sha }}" -- \
-              zadinventory-frontend/ .github/workflows/frontend.yml; then
-            echo "Nada mudou no frontend; deploy sera pulado."
-            echo "mudou=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Frontend alterado; deploy sera executado."
-            echo "mudou=true" >> "$GITHUB_OUTPUT"
-          fi
-
-  build-and-deploy:
-    name: Build and Deploy Frontend
-    runs-on: ubuntu-latest
-
-    needs: [test, detectar-alteracoes]
-
-    if: needs.detectar-alteracoes.outputs.mudou == 'true'
-
-    permissions:
-      contents: read
-      id-token: write
+    env:
+      IMAGE: zadinventory-frontend:ci
+      RESOLVER_HOST: kube-dns.kube-system.svc.cluster.local
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Authenticate with Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - name: Setup Google Cloud CLI
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker authentication
-        run: |
-          gcloud auth configure-docker \
-            southamerica-east1-docker.pkg.dev \
-            --quiet
 
       - name: Build Docker image
+        run: docker build -t "$IMAGE" ./zadinventory-frontend
+
+      - name: Validar a configuracao do Nginx
         run: |
-          docker build \
-            -t ${{ env.IMAGE }}:${{ github.sha }} \
-            ./zadinventory-frontend
+          docker run --rm \
+            --add-host "$RESOLVER_HOST:127.0.0.1" \
+            "$IMAGE" nginx -t
 
-      - name: Push Docker image
+      - name: Subir o container e validar (smoke test)
         run: |
-          docker push \
-            ${{ env.IMAGE }}:${{ github.sha }}
+          set -euo pipefail
 
-      - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy ${{ env.SERVICE }} \
-            --image ${{ env.IMAGE }}:${{ github.sha }} \
-            --region ${{ env.REGION }} \
-            --service-account ${{ env.SERVICE_ACCOUNT }} \
-            --platform managed \
-            --quiet
+          docker run -d --name frontend -p 8080:8080 \
+            --add-host "$RESOLVER_HOST:127.0.0.1" \
+            "$IMAGE"
 
-      # Validacao do sucesso do deploy: descobre a URL do servico e exige que a
-      # pagina responda 200. Tenta primeiro sem autenticacao, porque o frontend
-      # e o servico publico; se o IAM barrar, repete com um ID token.
-      - name: Validar deploy (smoke test)
-        run: |
-          set -u
-
-          URL=$(gcloud run services describe ${{ env.SERVICE }} \
-            --region ${{ env.REGION }} \
-            --platform managed \
-            --format 'value(status.url)')
-
-          if [ -z "$URL" ]; then
-            echo "Nao foi possivel obter a URL do servico."
-            exit 1
-          fi
-          echo "Servico publicado em: $URL"
-
-          for TENTATIVA in $(seq 1 10); do
-            CODIGO=$(curl -s -o corpo.txt -w '%{http_code}' "$URL/" || echo "000")
-
-            if [ "$CODIGO" = "401" ] || [ "$CODIGO" = "403" ]; then
-              TOKEN=$(gcloud auth print-identity-token --audiences="$URL" 2>/dev/null \
-                || gcloud auth print-identity-token 2>/dev/null || true)
-              if [ -n "$TOKEN" ]; then
-                CODIGO=$(curl -s -o corpo.txt -w '%{http_code}' \
-                  -H "Authorization: Bearer $TOKEN" "$URL/" || echo "000")
-              fi
-            fi
-
+          CODIGO="000"
+          for TENTATIVA in $(seq 1 15); do
+            CODIGO=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/ || echo "000")
             echo "tentativa ${TENTATIVA}: HTTP ${CODIGO}"
-
             if [ "$CODIGO" = "200" ]; then
-              echo "Deploy validado: a aplicacao respondeu com sucesso."
-              exit 0
+              break
             fi
-
-            sleep 10
+            sleep 2
           done
 
-          echo "O servico nao respondeu 200 apos 10 tentativas."
-          echo "Ultimo codigo: ${CODIGO}"
-          exit 1
+          if [ "$CODIGO" != "200" ]; then
+            echo "O frontend nao respondeu 200 na pagina inicial."
+            exit 1
+          fi
+
+          # Rotas do Angular nao existem como arquivo: o Nginx deve devolver o
+          # index.html (try_files), e nao 404.
+          CODIGO=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/rota-do-angular)
+          echo "rota do Angular: HTTP ${CODIGO}"
+          if [ "$CODIGO" != "200" ]; then
+            echo "O fallback para o index.html nao esta funcionando."
+            exit 1
+          fi
+
+          # O header X-Served-By e o que a demonstracao de balanceamento usa
+          # para mostrar qual Pod respondeu.
+          curl -sI http://localhost:8080/ | grep -i '^x-served-by:' \
+            || { echo "Header X-Served-By ausente."; exit 1; }
+
+          echo "Frontend validado: pagina, rota do Angular e headers OK."
+
+      - name: Logs do container (em caso de falha)
+        if: failure()
+        run: docker logs frontend || true

@@ -1,32 +1,19 @@
-name: Backend CI/CD
+name: Backend CI
 
-# Comportamento dos gatilhos:
-#   push em QUALQUER branch -> job "test" (validacao completa), sem deploy
-#   pull request para main  -> job "test", sem deploy
-#   push na main            -> job "test" e, se passar, build + push + deploy
-#
-# Nao existe filtro de "paths" aqui, e isso e proposital. Com filtro por pasta,
-# um PR que mexe apenas no frontend nunca dispararia este workflow, e um status
-# check obrigatorio ficaria preso em "Expected" para sempre, travando o merge.
-# A economia de nao republicar um servico que nao mudou e feita no job
-# "detectar-alteracoes", e nao no gatilho.
 on:
   push:
   pull_request:
     branches:
       - main
 
-env:
-  PROJECT_ID: project-bb29153a-91af-47dd-8df
-  REGION: southamerica-east1
-  SERVICE: backend
-  IMAGE: southamerica-east1-docker.pkg.dev/project-bb29153a-91af-47dd-8df/zadinventory/backend
-  SERVICE_ACCOUNT: backend-cloud-run@project-bb29153a-91af-47dd-8df.iam.gserviceaccount.com
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  # Todas as validacoes ficam neste job. Como "build-and-deploy" declara
-  # needs: test, qualquer falha aqui - teste, analise estatica ou
-  # vulnerabilidade - impede automaticamente o build da imagem e o deploy.
   test:
     name: Test Backend
     runs-on: ubuntu-latest
@@ -42,16 +29,10 @@ jobs:
           java-version: "17"
           cache: maven
 
-      # Usa o Maven do runner: o wrapper esta incompleto no repo (falta
-      # .mvn/wrapper), entao ./mvnw nao consegue nem gravar o jar que baixa.
-      # verify roda surefire (unitarios) e failsafe (integracao).
       - name: Run tests
         working-directory: zadinventory-backend/zadinventory
         run: mvn -B verify
 
-      # Escaneia as dependencias Maven declaradas no pom. Roda em modo "fs",
-      # e nao sobre a imagem, para que a falha aconteca ANTES do build - do
-      # contrario a validacao so ocorreria dentro do job de deploy.
       - name: Vulnerabilidades das dependencias (Trivy)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -62,162 +43,91 @@ jobs:
           exit-code: "1"
           scanners: vuln
 
-  # Descobre se o backend realmente mudou neste push. Sem isso, como o gatilho
-  # nao tem mais filtro de pasta, um commit que mexe so na documentacao ou so
-  # no frontend republicaria o backend sem necessidade.
-  detectar-alteracoes:
-    name: Detectar alteracoes no backend
+  docker:
+    name: Docker build and smoke test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    outputs:
-      mudou: ${{ steps.diff.outputs.mudou }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    needs: test
 
-      - name: Comparar com o commit anterior
-        id: diff
-        run: |
-          ANTERIOR="${{ github.event.before }}"
-
-          # Branch nova, force-push ou commit ausente: sem base de comparacao
-          # confiavel, assume que mudou para nao pular um deploy legitimo.
-          if [ -z "$ANTERIOR" ] \
-            || [ "$ANTERIOR" = "0000000000000000000000000000000000000000" ] \
-            || ! git cat-file -e "${ANTERIOR}^{commit}" 2>/dev/null; then
-            echo "Sem base de comparacao; tratando como alterado."
-            echo "mudou=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if git diff --quiet "$ANTERIOR" "${{ github.sha }}" -- \
-              zadinventory-backend/ .github/workflows/backend.yml; then
-            echo "Nada mudou no backend; deploy sera pulado."
-            echo "mudou=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Backend alterado; deploy sera executado."
-            echo "mudou=true" >> "$GITHUB_OUTPUT"
-          fi
-
-  build-and-deploy:
-    name: Build and Deploy Backend
-    runs-on: ubuntu-latest
-
-    needs: [test, detectar-alteracoes]
-
-    if: needs.detectar-alteracoes.outputs.mudou == 'true'
-
-    permissions:
-      contents: read
-      id-token: write
+    env:
+      IMAGE: zadinventory-backend:ci
+      NETWORK: zadinventory-ci
+      DB_NAME: zadinventory
+      DB_USER: zaduser
+      DB_PASSWORD: zadpass123
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Authenticate with Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - name: Setup Google Cloud CLI
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker authentication
-        run: |
-          gcloud auth configure-docker \
-            southamerica-east1-docker.pkg.dev \
-            --quiet
 
       - name: Build Docker image
+        run: docker build -t "$IMAGE" ./zadinventory-backend
+
+      - name: Subir o MySQL
         run: |
-          docker build \
-            -t ${{ env.IMAGE }}:${{ github.sha }} \
-            ./zadinventory-backend
+          set -euo pipefail
 
-      - name: Push Docker image
+          docker network create "$NETWORK"
+
+          docker run -d --name zadinventory-db --network "$NETWORK" \
+            -e MYSQL_DATABASE="$DB_NAME" \
+            -e MYSQL_USER="$DB_USER" \
+            -e MYSQL_PASSWORD="$DB_PASSWORD" \
+            -e MYSQL_ROOT_PASSWORD="$DB_PASSWORD" \
+            mysql:8.4
+
+          # -h 127.0.0.1 forca TCP: durante a inicializacao o MySQL so atende
+          # por socket, entao o ping so passa quando o servidor final subiu.
+          for TENTATIVA in $(seq 1 40); do
+            if docker exec zadinventory-db mysqladmin ping -h 127.0.0.1 \
+                -uroot -p"$DB_PASSWORD" --silent 2>/dev/null; then
+              echo "MySQL pronto (tentativa ${TENTATIVA})."
+              exit 0
+            fi
+            sleep 3
+          done
+
+          echo "O MySQL nao ficou pronto a tempo."
+          exit 1
+
+      - name: Subir o backend e validar (smoke test)
         run: |
-          docker push \
-            ${{ env.IMAGE }}:${{ github.sha }}
+          set -euo pipefail
 
-      - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy ${{ env.SERVICE }} \
-            --image ${{ env.IMAGE }}:${{ github.sha }} \
-            --region ${{ env.REGION }} \
-            --service-account ${{ env.SERVICE_ACCOUNT }} \
-            --platform managed \
-            --quiet
+          docker run -d --name backend --network "$NETWORK" -p 8080:8080 \
+            -e SPRING_DATASOURCE_URL="jdbc:mysql://zadinventory-db:3306/${DB_NAME}?allowPublicKeyRetrieval=true&useSSL=false" \
+            -e SPRING_CLOUD_GCP_SQL_ENABLED=false \
+            -e SPRING_CLOUD_GCP_CORE_ENABLED=false \
+            -e INSTANCE_CONNECTION_NAME=local:local:local \
+            -e DB_NAME="$DB_NAME" \
+            -e DB_USER="$DB_USER" \
+            -e DB_PASSWORD="$DB_PASSWORD" \
+            -e JWT_SECRET=chave-jwt-de-teste-do-ci-com-mais-de-64-caracteres-0123456789-abcdef \
+            -e JWT_EXPIRATION=86400000 \
+            "$IMAGE"
 
-      - name: Descobrir a URL do servico
-        id: servico
-        run: |
-          URL=$(gcloud run services describe ${{ env.SERVICE }} \
-            --region ${{ env.REGION }} \
-            --platform managed \
-            --format 'value(status.url)')
-
-          if [ -z "$URL" ]; then
-            echo "Nao foi possivel obter a URL do servico."
-            exit 1
-          fi
-
-          echo "Servico publicado em: $URL"
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
-
-      # O backend exige autenticacao IAM, entao o smoke test precisa de um ID
-      # token com a URL do servico como audiencia.
-      #
-      # Nao da para usar "gcloud auth print-identity-token" aqui: sob Workload
-      # Identity Federation a credencial e uma external account, e o gcloud nao
-      # consegue emitir ID token a partir dela - devolve vazio, com ou sem
-      # --audiences. Quem emite e a propria action de auth, via token_format.
-      # Por isso ela e chamada uma segunda vez, agora que a URL e conhecida.
-      - name: Gerar ID token para o smoke test
-        id: idtoken
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          token_format: id_token
-          id_token_audience: ${{ steps.servico.outputs.url }}
-          id_token_include_email: true
-
-      # Validacao do sucesso do deploy: exige HTTP 200 em /actuator/health.
-      # As tentativas cobrem o cold start da revisao recem-publicada.
-      - name: Validar deploy (smoke test)
-        env:
-          URL: ${{ steps.servico.outputs.url }}
-          ID_TOKEN: ${{ steps.idtoken.outputs.id_token }}
-        run: |
-          set -u
-
-          if [ -z "$ID_TOKEN" ]; then
-            echo "A action de auth nao devolveu um ID token."
-            exit 1
-          fi
-
-          for TENTATIVA in $(seq 1 10); do
+          # As tentativas cobrem a subida do Spring Boot.
+          for TENTATIVA in $(seq 1 40); do
             CODIGO=$(curl -s -o corpo.txt -w '%{http_code}' \
-              -H "Authorization: Bearer ${ID_TOKEN}" \
-              "${URL}/actuator/health" || echo "000")
-
+              http://localhost:8080/actuator/health || echo "000")
             echo "tentativa ${TENTATIVA}: HTTP ${CODIGO}"
 
-            if [ "$CODIGO" = "200" ]; then
+            if [ "$CODIGO" = "200" ] && grep -q '"status":"UP"' corpo.txt; then
               echo "Resposta: $(cat corpo.txt)"
-              echo "Deploy validado: o servico respondeu com sucesso."
+              echo "Backend validado: iniciou e conectou ao banco."
               exit 0
             fi
 
-            sleep 10
+            sleep 5
           done
 
-          echo "O servico nao respondeu 200 em /actuator/health apos 10 tentativas."
+          echo "O backend nao respondeu UP em /actuator/health."
           echo "Ultima resposta: $(cat corpo.txt 2>/dev/null || echo '(vazia)')"
-          echo "Se o codigo for 403, a conta de servico do deploy precisa de"
-          echo "roles/run.invoker no servico ${{ env.SERVICE }}."
           exit 1
+
+      - name: Logs dos containers (em caso de falha)
+        if: failure()
+        run: |
+          echo "===== backend ====="
+          docker logs backend || true
+          echo "===== mysql ====="
+          docker logs zadinventory-db || true

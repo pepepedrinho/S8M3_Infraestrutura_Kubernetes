@@ -1,162 +1,222 @@
-# ZAD Inventory
+# zadinventory no Kubernetes (Minikube)
 
-Sistema de inventário composto por **Backend** (Spring Boot) e **Frontend** (Angular), publicados como serviços independentes no **Google Cloud Run**.
+Sistema de gerenciamento de estoque (produtos, categorias, tags, operações e usuários) com **Spring Boot** no backend, **Angular** no frontend e **MySQL** como banco de dados.
+
+Este repositório é a entrega do **Mensal 3**: a aplicação desenvolvida no Mensal 1, que rodava na GCP, foi adaptada para rodar inteiramente em um cluster Kubernetes local com **Minikube**. Nenhuma funcionalidade nova foi criada; só a infraestrutura mudou.
+
+## Como a aplicação roda no cluster
+
+![Arquitetura do zadinventory no Minikube](docs/arquitetura.png)
+
+| Recurso | Tipo | Função |
+| --- | --- | --- |
+| `zadinventory-frontend` | Deployment (2 réplicas) + Service NodePort | Nginx servindo o Angular e repassando `/api/` ao backend |
+| `zadinventory-backend` | Deployment (2 réplicas) + Service ClusterIP | API Spring Boot |
+| `zadinventory-db` | Deployment (1 réplica) + PVC + Service ClusterIP | MySQL 8.4 com dados persistidos |
+| `zadinventory-config` | ConfigMap | Configurações não sensíveis (URL do banco, flags do Spring) |
+| `zadinventory-secret` | Secret | Usuário e senha do banco, chave do JWT |
+| `zadinventory-seed-admin` | Job + Secret `zadinventory-admin` | Cria o usuário administrador inicial |
 
 ## Estrutura do repositório
 
-```
-zadinventory-backend/          Dockerfile do backend
-  └── zadinventory/            projeto Maven (pom.xml, mvnw, src)
-zadinventory-frontend/         projeto Angular + Dockerfile + proxy Go
-.github/workflows/             pipelines de CI/CD
-```
-
-> Os dois caminhos do backend são diferentes de propósito: o Maven roda em `zadinventory-backend/zadinventory`, enquanto o `docker build` usa `zadinventory-backend` como contexto, porque o Dockerfile faz `COPY zadinventory/pom.xml` relativo a ele.
-
----
-
-## Deploy automático (GitHub Actions)
-
-É o caminho normal de publicação. Cada serviço tem seu próprio workflow, disparado apenas quando a sua pasta muda:
-
-### Quando cada coisa acontece
-
-| Evento | Validação | Deploy |
-|---|---|---|
-| Push em **qualquer** branch | ✅ roda | ❌ não |
-| Pull request para `main` | ✅ roda | ❌ não |
-| Push na `main` | ✅ roda | ✅ se a validação passar **e** a pasta do serviço tiver mudado |
-
-Os gatilhos **não** usam filtro de `paths`, de propósito. Com filtro por pasta, um PR que mexe apenas no frontend nunca dispararia o workflow do backend, e um status check obrigatório ficaria preso em "Expected" para sempre, travando o merge. A economia de não republicar um serviço que não mudou é feita depois, pelo job `detectar-alteracoes`, que compara o commit anterior com o atual.
-
-### O que é validado
-
-Toda validação vive no job `test`. Como `build-and-deploy` declara `needs: test`, **qualquer falha aqui impede automaticamente o build da imagem e o deploy** — não existe caminho que publique sem passar por tudo isto:
-
-| | Backend | Frontend |
-|---|---|---|
-| Testes | `mvn -B verify` — 93 unitários + 50 integração | `npm run test:ci` — 32 specs em ChromeHeadless |
-| Análise estática | SpotBugs (falha em qualquer achado novo) | ESLint (falha em qualquer erro) |
-| Vulnerabilidades | Trivy `fs` sobre as dependências Maven | `npm audit --omit=dev` |
-| Build | dentro do `mvn verify` | `npm run build` |
-
-### Validação do deploy
-
-Publicar não é o fim: depois do `gcloud run deploy`, cada workflow descobre a URL do serviço e faz uma requisição HTTP real, repetindo até 10 vezes para cobrir o cold start. **Se o serviço não responder 200, o job falha** mesmo que o deploy tenha sido aceito.
-
-No backend a chamada vai em `/actuator/health`, assinada com um ID token — o serviço exige autenticação IAM. Como o health agrega o indicador do banco, um 200 ali prova que a aplicação subiu **e** alcança o Cloud SQL.
-
-### Dívida técnica registrada
-
-Duas validações começam com exceções documentadas, para não reprovar código que já estava no projeto:
-
-- **SpotBugs** ignora `EI_EXPOSE_REP`/`EI_EXPOSE_REP2` (38 de 38 ocorrências iniciais), inerentes a entidades JPA com Lombok. Fora essas, o gate está em zero. Ver [`spotbugs-exclude.xml`](zadinventory-backend/zadinventory/spotbugs-exclude.xml).
-- **ESLint** rebaixa a aviso 7 regras com 64 ocorrências herdadas, 43 delas de acessibilidade em templates. O script usa `--max-warnings 64`, então o número não pode crescer. Ver [`eslint.config.js`](zadinventory-frontend/eslint.config.js).
-
-### Identificação das imagens
-
-Cada imagem recebe como tag o **SHA completo do commit**, e é a mesma tag no build, no push e no deploy — o que sobe é exatamente o que foi construído:
-
-```
-southamerica-east1-docker.pkg.dev/project-bb29153a-91af-47dd-8df/zadinventory/backend:<sha>
-southamerica-east1-docker.pkg.dev/project-bb29153a-91af-47dd-8df/zadinventory/frontend:<sha>
+```text
+zadinventory-backend/    Dockerfile + zadinventory/ (Spring Boot)
+zadinventory-frontend/   Dockerfile + default.conf (Nginx) + zadinventory/ (Angular)
+docs/                    Diagrama, requisitos e evidências para entrega
+k8s/                     Manifestos Kubernetes (01 a 06)
+.github/workflows/       Pipeline de testes (GitHub Actions)
 ```
 
-Não existe tag `latest`. Para descobrir o que está publicado, veja o SHA na revisão do Cloud Run e cole no GitHub para chegar ao commit exato. No Artifact Registry, ordene por data de envio — o nome não é sequencial.
+## Pré-requisitos
 
-### Configuração necessária
+- Windows com PowerShell
+- Docker Desktop (aberto e em execução)
+- Minikube e kubectl
+- Git
+- Cerca de 4 GB de memória e 4 CPUs disponíveis para o Docker Desktop
 
-Secrets do repositório, usados na autenticação por Workload Identity:
+## Passo a passo
 
-| Secret | Para quê |
-|---|---|
-| `GCP_WORKLOAD_IDENTITY_PROVIDER` | provedor de identidade federada |
-| `GCP_SERVICE_ACCOUNT` | conta de serviço que executa o deploy |
+Todos os comandos são em PowerShell.
 
-> **Atenção:** o `gcloud run deploy` do workflow passa apenas a imagem, a região e a service account. As variáveis de ambiente, a conexão com o Cloud SQL e o VPC Connector **não** estão no repositório — vivem na configuração do serviço no console, e o `gcloud run deploy` as preserva ao trocar só a imagem.
->
-> A consequência prática é que o deploy automático **depende do serviço já existir e estar configurado**. Se o serviço `backend` for recriado do zero, ou for publicado numa região nova, ele sobe sem as variáveis e o contêiner não inicia. Nesse caso, configure o serviço pelo console antes (veja o deploy manual abaixo) ou acrescente `--set-env-vars`, `--update-secrets` e `--add-cloudsql-instances` ao workflow.
+### 1. Instalar as ferramentas
 
----
-
-## Deploy manual
-
-Necessário na primeira publicação de um serviço, quando ainda não há o que preservar, e útil como alternativa se o Actions estiver indisponível.
-
-### 1. Autenticação no GCP
-
-```bash
-gcloud auth login
-gcloud config set project project-bb29153a-91af-47dd-8df
-gcloud auth configure-docker southamerica-east1-docker.pkg.dev
+```powershell
+winget install -e --id Docker.DockerDesktop
+winget install -e --id Kubernetes.minikube
+winget install -e --id Kubernetes.kubectl
+winget install -e --id Git.Git
 ```
 
-### 2. Frontend
+Reabra o terminal, com o Docker Desktop aberto, e confira:
 
-Na pasta `zadinventory-frontend`:
-
-```bash
-docker build -t frontend:1.x .
-docker tag frontend:1.x southamerica-east1-docker.pkg.dev/project-bb29153a-91af-47dd-8df/zadinventory/frontend:1.x
-docker push southamerica-east1-docker.pkg.dev/project-bb29153a-91af-47dd-8df/zadinventory/frontend:1.x
+```powershell
+docker version
+minikube version
+kubectl version --client
+git --version
 ```
 
-O deploy pode ser feito pela interface do Cloud Run, selecionando a imagem enviada, ou pelo `gcloud`:
+### 2. Clonar o repositório
 
-```bash
-gcloud run deploy frontend \
-  --image=southamerica-east1-docker.pkg.dev/project-bb29153a-91af-47dd-8df/zadinventory/frontend:1.x \
-  --region=southamerica-east1 \
-  --platform=managed
+```powershell
+git clone https://github.com/pepepedrinho/S8M3_Infraestrutura_Kubernetes.git
+cd S8M3_Infraestrutura_Kubernetes
 ```
 
-### 3. Backend
+Execute os comandos seguintes sempre a partir dessa pasta.
 
-Na pasta `zadinventory-backend`:
+### 3. Iniciar o cluster
 
-```bash
-docker build -t backend:1.x .
-docker tag backend:1.x southamerica-east1-docker.pkg.dev/project-bb29153a-91af-47dd-8df/zadinventory/backend:1.x
-docker push southamerica-east1-docker.pkg.dev/project-bb29153a-91af-47dd-8df/zadinventory/backend:1.x
+```powershell
+minikube start --driver=docker
+kubectl cluster-info
+kubectl get nodes
 ```
 
-No deploy do backend é preciso configurar as variáveis de ambiente, o VPC Connector e a conexão com o Cloud SQL. Em produção o serviço exige `INSTANCE_CONNECTION_NAME`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` e `JWT_SECRET` — sem qualquer uma delas o contêiner não inicia.
+O nó `minikube` deve aparecer com status `Ready`.
 
-```bash
-gcloud run deploy backend \
-  --image=southamerica-east1-docker.pkg.dev/project-bb29153a-91af-47dd-8df/zadinventory/backend:1.x \
-  --region=southamerica-east1 \
-  --platform=managed
+### 4. Construir as imagens dentro do Minikube
+
+O build roda direto no runtime do Minikube, então as imagens já ficam disponíveis para o cluster, sem precisar de registry.
+
+```powershell
+minikube image build -t zadinventory-backend:local ./zadinventory-backend
+minikube image build -t zadinventory-frontend:local ./zadinventory-frontend
+
+minikube image ls | Select-String zadinventory
 ```
 
-> As tags `1.x` são a convenção do fluxo manual. O registry contém as duas convenções: `1.x` das publicações manuais e SHAs de commit das automáticas.
+A listagem deve mostrar as duas imagens (`zadinventory-backend:local` e `zadinventory-frontend:local`). O build leva alguns minutos, por causa do Maven e do `npm install`.
 
----
+### 5. Aplicar os manifestos
 
-## Desenvolvimento local
+```powershell
+kubectl apply -f k8s/
 
-O passo a passo do backend (MySQL local, perfil `local`, criação do primeiro usuário, autenticação) está em [`zadinventory-backend/COMO-RODAR-LOCAL.md`](zadinventory-backend/COMO-RODAR-LOCAL.md).
+kubectl rollout status deployment/zadinventory-db --timeout=180s
+kubectl rollout status deployment/zadinventory-backend --timeout=300s
+kubectl rollout status deployment/zadinventory-frontend --timeout=120s
 
-Frontend:
+kubectl wait --for=condition=complete job/zadinventory-seed-admin --timeout=300s
+kubectl logs job/zadinventory-seed-admin
 
-```bash
-cd zadinventory-frontend
-npm install
-npm start        # ng serve com proxy.conf.json
+kubectl get all
 ```
 
-## Testes
+O log do Job deve terminar com `HTTP 200`, indicando que o usuário administrador foi criado. Todos os Pods devem ficar em `Running` e `1/1`.
 
-```bash
-cd zadinventory-backend/zadinventory
-mvn test         # 93 testes unitários (Surefire)
-mvn verify       # + 50 testes de integração (Failsafe) e relatório JaCoCo
+### 6. Abrir a aplicação
+
+```powershell
+minikube service zadinventory-frontend --url
 ```
 
-A separação é por diretório: `src/test/java/**/unit/` roda no Surefire e `src/test/java/**/Integration/` no Failsafe. Como o CI precisa das duas suítes, o workflow usa `verify`, não `test`.
+Deixe esse terminal aberto e acesse no navegador a URL exibida. Faça login com o administrador criado pelo Job:
 
-Nenhum teste precisa de MySQL — todos usam H2 em memória através do perfil `test`.
+| Campo | Valor |
+| --- | --- |
+| E-mail | `admin@admin.com` |
+| Senha | `admin` |
 
----
+São credenciais de desenvolvimento local, definidas em `k8s/06-admin-job.yaml` (e as do banco e do JWT em `k8s/02-secret.yaml`).
 
-> **Importante:** não versionar senhas, tokens ou outras credenciais no repositório. O `application-local.properties`, que guarda a senha do banco de desenvolvimento, está no `.gitignore` por esse motivo.
+## Demonstração
+
+Comandos usados na apresentação.
+
+### Pods, Services e Deployments
+
+```powershell
+kubectl get pods -o wide
+kubectl get services
+kubectl get deployments
+```
+
+### Balanceamento de carga entre os Pods
+
+O Nginx responde com o header `X-Served-By`, que traz o nome do Pod que atendeu. As requisições partem de um Pod temporário dentro do cluster e passam pelo Service:
+
+```powershell
+kubectl get pods -l app=zadinventory-frontend
+
+kubectl run teste-lb --rm -i --restart=Never --image=curlimages/curl --command -- sh -c 'for i in 1 2 3 4 5 6 7 8; do curl -sI http://zadinventory-frontend | grep -i x-served-by; done'
+```
+
+A saída alterna entre os nomes dos dois Pods do frontend. Os endereços que o Service usa:
+
+```powershell
+kubectl get endpoints zadinventory-frontend zadinventory-backend
+```
+
+### Exclusão de um Pod e recriação automática
+
+```powershell
+$pod = kubectl get pods -l app=zadinventory-frontend -o jsonpath='{.items[0].metadata.name}'
+$pod
+
+kubectl delete pod $pod --wait=false
+kubectl get pods -l app=zadinventory-frontend -w
+```
+
+Pressione `Ctrl+C` para sair do `-w`. O Deployment cria um Pod novo para manter 2 réplicas. O mesmo funciona para o backend com `-l app=zadinventory-backend`.
+
+### Comunicação entre os componentes
+
+```powershell
+kubectl exec deploy/zadinventory-frontend -- wget -qO- http://zadinventory-backend:8080/actuator/health
+
+kubectl describe service zadinventory-backend
+kubectl describe service zadinventory-db
+kubectl get configmap,secret
+kubectl logs deploy/zadinventory-backend --tail=20
+```
+
+O primeiro comando mostra o frontend chamando o backend pelo nome do Service, e o `{"status":"UP"}` confirma que o backend está de pé e conectado ao banco.
+
+## Remover tudo ao terminar
+
+Remover os recursos da aplicação (isso também apaga o volume do MySQL e os dados):
+
+```powershell
+kubectl delete -f k8s/
+```
+
+Parar o cluster, mantendo o estado para uma próxima vez:
+
+```powershell
+minikube stop
+```
+
+Apagar o cluster por completo, com as imagens construídas dentro dele:
+
+```powershell
+minikube delete
+```
+
+## Solução de problemas
+
+```powershell
+kubectl get pods
+kubectl describe pod <nome-do-pod>
+kubectl logs deploy/zadinventory-backend
+kubectl logs deploy/zadinventory-db
+kubectl get events --sort-by=.lastTimestamp
+```
+
+- **`ErrImageNeverPull` ou `ImagePullBackOff`:** as imagens não estão no Minikube. Refaça o passo 4 e confirme com `minikube image ls`.
+- **Pod `Pending` ou reiniciando com `OOMKilled`:** falta memória. Recrie o cluster com mais recursos: `minikube delete` e depois `minikube start --driver=docker --cpus=4 --memory=4096` (depois refaça os passos 4 e 5).
+- **Backend demora a ficar `Ready`:** é normal nos primeiros minutos, porque ele espera o MySQL inicializar. Acompanhe com `kubectl logs deploy/zadinventory-backend`.
+- **Depois de alterar código:** refaça o build da imagem correspondente (passo 4) e reinicie o Deployment, porque a tag `local` não muda:
+
+```powershell
+kubectl rollout restart deployment/zadinventory-backend
+kubectl rollout restart deployment/zadinventory-frontend
+```
+
+- **Rodar o Job do administrador de novo** (por exemplo, depois de recriar o banco): o Job precisa ser recriado.
+
+```powershell
+kubectl delete job zadinventory-seed-admin --ignore-not-found
+kubectl apply -f k8s/06-admin-job.yaml
+```
