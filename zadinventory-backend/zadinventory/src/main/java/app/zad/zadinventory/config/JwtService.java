@@ -1,7 +1,7 @@
 package app.zad.zadinventory.config;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.MalformedJwtException;
@@ -23,7 +23,7 @@ import java.util.function.Function;
 public class JwtService {
 
     /** Usado só para ler o cabeçalho JOSE (não verificado) e decidir rejeições. */
-    private static final ObjectMapper JOSE_MAPPER = new ObjectMapper();
+    private static final JsonMapper JOSE_MAPPER = JsonMapper.builder().build();
 
     @Value("${jwt.secret}")
     private String secretKey;
