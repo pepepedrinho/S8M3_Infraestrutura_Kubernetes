@@ -59,9 +59,11 @@ git --version
 
 ### 2. Clonar o repositório
 
-```powershell
-git clone https://github.com/pepepedrinho/S8M3_Infraestrutura_Kubernetes.git
-cd S8M3_Infraestrutura_Kubernetes
+Clone o repositório diretamente na branch `03-kubernetes`, que contém a implementação utilizada neste projeto.
+
+```bash
+git clone -b 03-kubernetes --single-branch https://github.com/pepepedrinho/S8_GCP_CICD_Kubernetes.git
+cd S8_GCP_CICD_Kubernetes
 ```
 
 Execute os comandos seguintes sempre a partir dessa pasta.
